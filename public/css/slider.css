@@ -1,0 +1,59 @@
+.custom-carousel-item {
+    height: fit-content;
+    background-color: #292929;
+    position: relative;
+}
+.custom-carousel-img {
+    object-fit: cover;
+    height: 100%;
+    opacity: 0.8;
+}
+.custom-carousel-caption {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.5);
+    padding: 20px;
+    border-radius: 10px;
+    text-align: center;
+}
+.bannerText
+{
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+    height: 100%;
+}
+.custom-carousel-control-prev-icon,
+.custom-carousel-control-next-icon {
+    background-color: #000;
+    border-radius: 50%;
+    padding: 10px;
+}
+.custom-carousel-control-prev-icon {
+    background-image: url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" fill="%23fff" viewBox="0 0 16 16"%3E%3Cpath d="M11.354 1.354a.5.5 0 0 0-.708 0l-6 6a.5.5 0 0 0 0 .708l6 6a.5.5 0 1 0 .708-.708L5.707 8l5.647-5.646a.5.5 0 0 0 0-.708z"/%3E%3C/svg%3E');
+}
+.custom-carousel-control-next-icon {
+    background-image: url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" fill="%23fff" viewBox="0 0 16 16"%3E%3Cpath d="M4.646 1.354a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 1 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z"/%3E%3C/svg%3E');
+}
+.carousel-caption {
+    background: rgba(0, 0, 0, 0.5);
+    padding: 20px;
+    border-radius: 10px;
+    text-align: center;
+    font-size: 1.5em;
+}
+.carousel-caption h1 {
+    margin: 0;
+}
+
+.carousel-caption p{
+    margin-top: 20px;
+}
+.shadow-title {
+    background: rgba(0, 0, 0, 0.3);
+    margin: auto;
+    padding: 10px;
+}
