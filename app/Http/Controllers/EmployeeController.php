@@ -3,24 +3,16 @@
 namespace App\Http\Controllers;
 
 use App\Models\Employee;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Carbon\Carbon;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class EmployeeController extends Controller
 {
-    public function index(Request $request)
+    public function index()
     {
-        $employees = Employee::with([
-            'currentDepartment:dept_no,dept_name',
-            'currentTitle:emp_no,title',
-            'currentSalary:emp_no,salary'
-        ])
-            ->select('emp_no', 'first_name', 'last_name', 'hire_date')
-            ->paginate(20);
-
-        return view('employees.index', compact('employees'));
+        // The list itself is rendered by the EmployeeFilter / EmployeeList Livewire components.
+        return view('employees.index');
     }
 
     public function show($emp_no)
@@ -28,7 +20,7 @@ class EmployeeController extends Controller
         $employee = Employee::with([
             'currentDepartment',
             'currentTitle',
-            'currentSalary'
+            'currentSalary',
         ])->findOrFail($emp_no);
 
         $departmentHistory = DB::table('dept_emp')
@@ -60,7 +52,7 @@ class EmployeeController extends Controller
         $isCurrentEmployee = $employee->currentDepartment->count() > 0;
         $employmentEndDate = null;
 
-        if (!$isCurrentEmployee && $departmentHistory->count() > 0) {
+        if (! $isCurrentEmployee && $departmentHistory->count() > 0) {
             $lastDepartmentRecord = $departmentHistory->filter(function ($dept) {
                 return $dept->to_date !== '9999-01-01';
             })->sortByDesc('to_date')->first();
@@ -101,7 +93,7 @@ class EmployeeController extends Controller
             'titleChanges' => $titleHistory->count(),
             'salaryChanges' => $salaryHistory->count(),
             'isCurrentEmployee' => $isCurrentEmployee,
-            'employmentEndDate' => $employmentEndDate
+            'employmentEndDate' => $employmentEndDate,
         ];
 
         $salaryChartData = collect();
@@ -112,7 +104,7 @@ class EmployeeController extends Controller
                 return [
                     'year' => Carbon::parse($yearSalaries->first()->from_date)->year,
                     'salary' => round($yearSalaries->avg('salary')),
-                    'count' => $yearSalaries->count()
+                    'count' => $yearSalaries->count(),
                 ];
             })->sortBy('year');
             $salaryChartData = $salaryByYear->values();
@@ -169,13 +161,13 @@ class EmployeeController extends Controller
                 }
             });
 
-            $combinedHistory->push((object)[
+            $combinedHistory->push((object) [
                 'from_date' => $salary->from_date,
                 'to_date' => $salary->to_date,
                 'salary' => $salary->salary,
                 'department_name' => $department ? $department->dept_name : 'Unknown',
                 'title' => $title ? $title->title : 'Unknown',
-                'is_current' => $salary->to_date === '9999-01-01'
+                'is_current' => $salary->to_date === '9999-01-01',
             ]);
         }
 
@@ -187,7 +179,7 @@ class EmployeeController extends Controller
         $employee = Employee::with([
             'currentDepartment',
             'currentTitle',
-            'currentSalary'
+            'currentSalary',
         ])->findOrFail($emp_no);
 
         $departmentHistory = DB::table('dept_emp')
@@ -214,7 +206,7 @@ class EmployeeController extends Controller
         $isCurrentEmployee = $employee->currentDepartment->count() > 0;
         $employmentEndDate = null;
 
-        if (!$isCurrentEmployee && $departmentHistory->count() > 0) {
+        if (! $isCurrentEmployee && $departmentHistory->count() > 0) {
             $lastDepartmentRecord = $departmentHistory->filter(function ($dept) {
                 return $dept->to_date !== '9999-01-01';
             })->sortByDesc('to_date')->first();
@@ -248,7 +240,7 @@ class EmployeeController extends Controller
             'totalDays' => $totalDays,
             'departmentChanges' => $departmentHistory->count(),
             'isCurrentEmployee' => $isCurrentEmployee,
-            'employmentEndDate' => $employmentEndDate
+            'employmentEndDate' => $employmentEndDate,
         ];
 
         $dataToPass = compact(
@@ -264,6 +256,6 @@ class EmployeeController extends Controller
             ->setPaper('A4', 'portrait')
             ->setOptions(['isHtml5ParserEnabled' => true, 'isPhpEnabled' => true, 'defaultFont' => 'DejaVu Sans']);
 
-        return $pdf->download('employee_details_' . $employee->emp_no . '_' . $employee->first_name . '_' . $employee->last_name . '.pdf');
+        return $pdf->download('employee_details_'.$employee->emp_no.'_'.$employee->first_name.'_'.$employee->last_name.'.pdf');
     }
 }

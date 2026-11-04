@@ -10,10 +10,10 @@
                 {{ $employees->total() }} employee(s) found
             </div>
             <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#exportModal"
-                data-selected-count="{{ $this->getSelectedCount() }}" data-total-count="{{ $employees->total() }}"
+                data-selected-count="{{ $selectedCount }}" data-total-count="{{ $employees->total() }}"
                 id="exportTriggerBtn">
                 <i class="bi bi-download me-1"></i>
-                Export Selected (<span id="exportCountDisplay">{{ $this->getSelectedCount() }}</span>)
+                Export Selected (<span id="exportCountDisplay">{{ $selectedCount }}</span>)
             </button>
         </div>
     </div>
@@ -30,9 +30,9 @@
                 </div>
                 <div>
                     <span class="text-muted small">
-                        Selected {{ $this->getSelectedCount() }} of {{ $employees->total() }} records
+                        Selected {{ $selectedCount }} of {{ $employees->total() }} records
                     </span>
-                    @if ($this->getSelectedCount() !== $employees->total())
+                    @if ($selectedCount !== $employees->total())
                         <button class="btn btn-sm btn-outline-secondary ms-2" wire:click="resetSelection">
                             <i class="bi bi-arrow-clockwise"></i>
                         </button>

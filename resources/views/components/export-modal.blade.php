@@ -99,8 +99,6 @@
             const employeeListComponent = findLivewireComponentByName('employee-list');
 
             if (!employeeListComponent) {
-                // console.error(
-                //     'EmployeeList component ("employee-list") not found for updateSelectedCount.');
                 selectedCountText.innerHTML =
                     `<span class="text-danger">Error: EmployeeList component not found.</span>`;
                 csvBtn.disabled = true;
@@ -112,8 +110,6 @@
             }
 
             if (typeof employeeListComponent.call !== 'function') {
-                // console.error("CRITICAL: employeeListComponent.call IS NOT a function. Component object:",
-                //     employeeListComponent);
                 selectedCountText.innerHTML =
                     `<span class="text-danger">Error: Component 'employee-list' is not callable.</span>`;
                 handleFallbackForCount();
@@ -134,8 +130,6 @@
                     `<i class="bi bi-download me-1"></i> ${hasSelection ? 'Export PDF' : 'No Selection'}`;
 
             } catch (error) {
-                // console.error('Error during .call("getSelectedCount") on employeeListComponent:', error
-                //     .message);
                 selectedCountText.innerHTML =
                     `<span class="text-danger">Error: Failed to get selection details. ${error.message}</span>`;
                 handleFallbackForCount();
@@ -163,83 +157,30 @@
                 `<i class="bi bi-download me-1"></i> ${hasSelection ? 'Export PDF' : 'No Selection'}`;
         }
 
-        async function getLivewireFilters() {
+        async function getExportPayload() {
             const listComponent = findLivewireComponentByName('employee-list');
-            const filterComponent = findLivewireComponentByName('employee-filter');
 
-            // if (!listComponent) {
-            //     console.error("getLivewireFilters: 'employee-list' component critically not found.");
-            //     throw new Error('employee-list component not found for fetching filters.');
-            // }
-            // if (typeof listComponent.call !== 'function') {
-            //     console.error("CRITICAL: listComponent.call IS NOT a function in getLivewireFilters.");
-            //     throw new Error('listComponent is not callable in getLivewireFilters');
-            // }
-            // if (filterComponent && typeof filterComponent.get !== 'function') {
-            //     console.warn(
-            //         "Warning: filterComponent.get IS NOT a function in getLivewireFilters. Filter values might be empty."
-            //     );
-            // }
-
-            try {
-                const selectedIds = await listComponent.call('getSelectedEmployeeIds');
-                const getSafe = async (comp, prop, def = '') => {
-                    if (comp && typeof comp.get === 'function') {
-                        try {
-                            return await comp.get(prop) || def;
-                        } catch (e) {
-                            return def;
-                        }
-                    }
-                    return def;
-                };
-
-                const filters = {
-                    search: await getSafe(filterComponent, 'search', ''),
-                    employmentStatus: await getSafe(filterComponent, 'employmentStatus', 'all'),
-                    gender: await getSafe(filterComponent, 'gender', 'all'),
-                    department: await getSafe(filterComponent, 'department', 'all'),
-                    jobTitle: await getSafe(filterComponent, 'jobTitle', 'all'),
-                    salaryMin: await getSafe(filterComponent, 'salaryMin', ''),
-                    salaryMax: await getSafe(filterComponent, 'salaryMax', ''),
-                    sortBy: await getSafe(listComponent, 'sortBy', 'emp_no'),
-                    sortDirection: await getSafe(listComponent, 'sortDirection', 'asc'),
-                    selectedEmployees: selectedIds || []
-                };
-                return filters;
-
-            } catch (error) {
-                // console.error('Error fetching Livewire filters values:', error);
-                let fallbackSelectedIds = [];
-                if (listComponent && typeof listComponent.call ===
-                    'function') { // check again before trying to call
-                    try {
-                        fallbackSelectedIds = await listComponent.call('getSelectedEmployeeIds') || [];
-                    } catch (e) {}
-                }
-                return {
-                    search: '',
-                    employmentStatus: 'all',
-                    gender: 'all',
-                    department: 'all',
-                    jobTitle: 'all',
-                    salaryMin: '',
-                    salaryMax: '',
-                    sortBy: 'emp_no',
-                    sortDirection: 'asc',
-                    selectedEmployees: fallbackSelectedIds
-                };
+            if (!listComponent || typeof listComponent.call !== 'function') {
+                throw new Error('Employee list component not found.');
             }
+
+            return await listComponent.call('getExportPayload');
+        }
+
+        function addHiddenInput(form, name, value) {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = name;
+            input.value = value;
+            form.appendChild(input);
         }
 
         async function handleDownload(format) {
             try {
-                const filters = await getLivewireFilters();
+                const payload = await getExportPayload();
 
-                if (!filters.selectedEmployees || filters.selectedEmployees.length === 0) {
+                if (!payload || payload.selectedCount === 0) {
                     alert('Please select at least one employee to export.');
-                    const btnToReEnable = format === 'csv' ? csvBtn : pdfBtn;
-                    if (btnToReEnable.disabled) btnToReEnable.disabled = false;
                     return;
                 }
 
@@ -253,34 +194,22 @@
                 form.method = 'POST';
                 form.style.display = 'none';
 
-                const csrfInput = document.createElement('input');
-                csrfInput.type = 'hidden';
-                csrfInput.name = '_token';
-                csrfInput.value = '{{ csrf_token() }}';
-                form.appendChild(csrfInput);
+                addHiddenInput(form, '_token', '{{ csrf_token() }}');
+                addHiddenInput(form, 'format', format);
+                addHiddenInput(form, 'selectAll', payload.selectAll ? '1' : '0');
 
-                const formatInput = document.createElement('input');
-                formatInput.type = 'hidden';
-                formatInput.name = 'format';
-                formatInput.value = format;
-                form.appendChild(formatInput);
+                // The selection is sent as "all matching except ..." or "only these",
+                // never as the full list of ids.
+                const ids = payload.selectAll ? payload.excludedEmployees : payload.selectedEmployees;
+                const idsField = payload.selectAll ? 'excludedEmployees[]' : 'selectedEmployees[]';
+                (ids || []).forEach(empNo => addHiddenInput(form, idsField, empNo));
 
-                filters.selectedEmployees.forEach(empNo => {
-                    const input = document.createElement('input');
-                    input.type = 'hidden';
-                    input.name = 'selectedEmployees[]';
-                    input.value = empNo;
-                    form.appendChild(input);
-                });
-
-                Object.keys(filters).forEach(key => {
-                    if (key !== 'selectedEmployees' && filters[key] !== '' && filters[key] !==
-                        null && typeof filters[key] !== 'undefined') {
-                        const input = document.createElement('input');
-                        input.type = 'hidden';
-                        input.name = key;
-                        input.value = filters[key];
-                        form.appendChild(input);
+                ['search', 'employmentStatus', 'gender', 'department', 'jobTitle', 'salaryMin', 'salaryMax',
+                    'sortBy', 'sortDirection'
+                ].forEach(key => {
+                    const value = payload[key];
+                    if (value !== '' && value !== null && typeof value !== 'undefined') {
+                        addHiddenInput(form, key, value);
                     }
                 });
 
