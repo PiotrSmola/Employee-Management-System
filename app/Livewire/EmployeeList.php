@@ -33,14 +33,6 @@ class EmployeeList extends Component
         $this->selectAll = true;
         $this->selectedEmployees = [];
         $this->excludedEmployees = [];
-
-        \Log::info('EmployeeList mounted', [
-            'component_class' => get_class($this),
-            'selectAll' => $this->selectAll,
-            'selectedEmployees' => $this->selectedEmployees,
-            'excludedEmployees' => $this->excludedEmployees,
-            'public_methods' => get_class_methods($this)
-        ]);
     }
 
     public function updateFilters($filters)
@@ -70,11 +62,6 @@ class EmployeeList extends Component
 
     public function updatedSelectAll()
     {
-        \Log::info('updatedSelectAll called', [
-            'selectAll' => $this->selectAll,
-            'selectedEmployees_before' => $this->selectedEmployees,
-            'excludedEmployees_before' => $this->excludedEmployees
-        ]);
 
         if ($this->selectAll) {
             $this->selectedEmployees = [];
@@ -85,22 +72,10 @@ class EmployeeList extends Component
         }
         $this->totalEmployees = null;
         $this->dispatch('$refresh');
-        \Log::info('updatedSelectAll finished', [
-            'selectAll' => $this->selectAll,
-            'selectedEmployees_after' => $this->selectedEmployees,
-            'excludedEmployees_after' => $this->excludedEmployees,
-            'selectedCount' => $this->getSelectedCount()
-        ]);
     }
 
     public function toggleEmployee($empNo)
     {
-        \Log::info('toggleEmployee called', [
-            'empNo' => $empNo,
-            'selectAll_before' => $this->selectAll,
-            'selectedEmployees_before' => $this->selectedEmployees,
-            'excludedEmployees_before' => $this->excludedEmployees
-        ]);
 
         if ($this->selectAll) {
             if (in_array($empNo, $this->excludedEmployees)) {
@@ -116,13 +91,6 @@ class EmployeeList extends Component
             }
         }
         $this->totalEmployees = null;
-        \Log::info('toggleEmployee finished', [
-            'empNo' => $empNo,
-            'selectAll_after' => $this->selectAll,
-            'selectedEmployees_after' => $this->selectedEmployees,
-            'excludedEmployees_after' => $this->excludedEmployees,
-            'selectedCount' => $this->getSelectedCount()
-        ]);
     }
 
     public function isEmployeeSelected($empNo)
@@ -150,11 +118,9 @@ class EmployeeList extends Component
                 $total = $this->getTotalEmployees();
                 $excluded = count($this->excludedEmployees);
                 $result = max(0, $total - $excluded);
-                \Log::info('getSelectedCount (selectAll=true)', ['total' => $total, 'excluded' => $excluded, 'result' => $result]);
                 return $result;
             } else {
                 $selected = count($this->selectedEmployees);
-                \Log::info('getSelectedCount (selectAll=false)', ['selected' => $selected, 'selectedEmployees' => $this->selectedEmployees]);
                 return $selected;
             }
         } catch (\Exception $e) {
@@ -167,14 +133,6 @@ class EmployeeList extends Component
     {
         if ($this->totalEmployees === null) {
             $this->totalEmployees = $this->getEmployeesQuery()->count();
-            \Log::info('getTotalEmployees calculated', [
-                'total' => $this->totalEmployees,
-                'search' => $this->search,
-                'employmentStatus' => $this->employmentStatus,
-                'gender' => $this->gender,
-                'department' => $this->department,
-                'jobTitleFilter' => $this->jobTitleFilter
-            ]);
         }
         return $this->totalEmployees;
     }
@@ -196,7 +154,6 @@ class EmployeeList extends Component
             'selectedCount' => $selectedCount,
             'hasSelection' => $selectedCount > 0
         ];
-        \Log::info('getSelectionInfo called', $result);
         return $result;
     }
 
@@ -206,10 +163,8 @@ class EmployeeList extends Component
             if ($this->selectAll) {
                 $allIds = $this->getEmployeesQuery()->pluck('emp_no')->toArray();
                 $selectedIds = array_values(array_diff($allIds, $this->excludedEmployees));
-                \Log::info('getAllSelectedEmployeeIds (selectAll=true)', ['total_found' => count($allIds), 'excluded_count' => count($this->excludedEmployees), 'final_selected' => count($selectedIds)]);
                 return $selectedIds;
             } else {
-                \Log::info('getAllSelectedEmployeeIds (selectAll=false)', ['selected_count' => count($this->selectedEmployees), 'selected_ids' => $this->selectedEmployees]);
                 return $this->selectedEmployees;
             }
         } catch (\Exception $e) {
