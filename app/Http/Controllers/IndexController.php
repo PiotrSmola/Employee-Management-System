@@ -11,7 +11,7 @@ class IndexController extends Controller
 {
     public function index()
     {
-        // Cache 15 minut - dashboard nie musi być realtime
+        // Cached for 15 minutes - the dashboard does not need to be real-time.
         $stats = Cache::remember('dashboard_stats', 900, function () {
             return [
                 'totalEmployees' => Employee::count(),
@@ -34,7 +34,7 @@ class IndexController extends Controller
                 ->select('departments.dept_name', DB::raw('count(*) as total'))
                 ->groupBy('departments.dept_name', 'departments.dept_no')
                 ->orderBy('total', 'desc')
-                ->limit(8) // max 8 departamentów
+                ->limit(8) // at most 8 departments
                 ->get();
         });
 

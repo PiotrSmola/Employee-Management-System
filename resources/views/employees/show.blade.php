@@ -265,7 +265,7 @@
                     data: {
                         labels: salaryData.map(item => item.year.toString()),
                         datasets: [{
-                            label: 'Średnia pensja (USD)',
+                            label: @json(__('Average salary (USD)')),
                             data: salaryData.map(item => item.salary),
                             borderColor: '#3b82f6',
                             backgroundColor: 'rgba(59, 130, 246, 0.1)',
@@ -288,7 +288,7 @@
                             tooltip: {
                                 callbacks: {
                                     label: function(context) {
-                                        return 'Średnia pensja: $' + context.parsed.y.toLocaleString();
+                                        return @json(__('Average salary')) + ': $' + context.parsed.y.toLocaleString();
                                     }
                                 }
                             }
@@ -305,7 +305,7 @@
                             x: {
                                 title: {
                                     display: true,
-                                    text: 'Rok'
+                                    text: @json(__('Year'))
                                 }
                             }
                         },

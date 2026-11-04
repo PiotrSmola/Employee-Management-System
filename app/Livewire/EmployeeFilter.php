@@ -19,7 +19,7 @@ class EmployeeFilter extends Component
 
     protected $listeners = ['resetFilters' => 'resetAllFilters'];
 
-    public function mount($search = '', $employmentStatus = 'all', $gender = 'all', $department = 'all', $salaryMin = '', $salaryMax = '', $jobTitle = 'all') // Dodaj jobTitle
+    public function mount($search = '', $employmentStatus = 'all', $gender = 'all', $department = 'all', $salaryMin = '', $salaryMax = '', $jobTitle = 'all')
     {
         $this->search = $search;
         $this->employmentStatus = $employmentStatus;
