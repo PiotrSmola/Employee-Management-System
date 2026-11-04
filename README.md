@@ -20,7 +20,7 @@ A comprehensive web-based employee management platform built with Laravel 11, de
 - **Responsive Design**: Mobile-friendly interface built with Bootstrap
 - **Optimized Queries**: Efficient database operations with Laravel Eloquent relationships
 - **PDF Generation**: Professional reports using DomPDF
-- **Data Filtering**: Advanced search and filtering capabilities with Spatie Query Builder
+- **Data Filtering**: Search, filtering and sorting through a shared query object (`App\Queries\EmployeeSearchQuery`)
 - **Interactive UI**: Enhanced user experience with Livewire components
 
 ## Technology Stack
@@ -87,6 +87,13 @@ docker compose --env-file .env.docker exec app php artisan <command>
 
 After code changes, run the start script again – it rebuilds the app image.
 
+On start the app container runs `php artisan migrate`. On the imported dataset the
+schema migrations are no-ops; the first run adds the directory indexes online
+(roughly 45 s on the full dataset, the tables stay usable meanwhile).
+
+> Never run `migrate:fresh`, `migrate:refresh` or `db:wipe` against the Docker
+> database – they drop the imported employees dataset.
+
 ## Manual Installation
 
 ### 1. Clone the Repository
@@ -128,11 +135,17 @@ DB_PASSWORD=your_password
 ```bash
 php artisan migrate
 ```
+The migrations create the dataset tables (`employees`, `departments`, `dept_emp`,
+`dept_manager`, `titles`, `salaries`) with the same structure as the sample database.
+If the tables already exist (e.g. the dataset was imported), they are left untouched.
 
-### 6. Seed Database (Optional)
+### 6. Seed Demo Data (Optional)
 ```bash
 php artisan db:seed
 ```
+Adds a small demo dataset (9 departments, ~200 employees with histories) – only
+when the `employees` table is empty. For the full dataset import
+[test_db](https://github.com/datacharmer/test_db) instead.
 
 ### 7. Start Development Server
 ```bash
@@ -191,12 +204,47 @@ The system uses the following core entities:
 - Formatted reports with company branding
 - Pagination support for large datasets
 
-## Performance Optimizations
+## Performance Notes
 
-- **Query Optimization**: Efficient eager loading of relationships
-- **Caching Strategy**: 15-minute cache for dashboard statistics, 30-minute cache for department data
-- **Database Indexing**: Optimized indexes for frequent queries
-- **Lazy Loading**: Strategic use of lazy loading for related data
+The directory has to stay fast on ~300k employees / ~2.8M salary rows:
+
+- **Shared query object**: `App\Queries\EmployeeSearchQuery` (used by the Livewire list
+  and the export) applies every filter as a semi-join on `employees`, selects only the
+  `emp_no` values of the requested page and loads the display columns for those rows.
+  Department/title/salary sorts are read as index-ordered segments; former employees
+  are still filtered and sorted by their last department and title.
+- **Counts**: the filtered total is computed once per filter change and reused for
+  paging, sorting and the selection count.
+- **Indexes**: migration `add_directory_indexes_to_history_tables` adds indexes on the
+  `to_date` / `dept_no` / `title` / `salary` / `hire_date` columns (idempotent, built online).
+- **Export**: the selection is sent as "all matching except …" / "only these ids", the CSV
+  is streamed in chunks; PDF export is limited to 1,000 rows.
+- **Caching**: 15-minute cache for dashboard statistics, 30-minute cache for department data.
+
+Typical timings on the full dataset (Docker, warm-ish cache): unfiltered list ~0.1 s,
+single filters and sorts 0.1–0.6 s, combined filters up to ~2 s, full CSV export of all
+300k employees ~50 s (streamed).
+
+## Running Tests
+
+The suite uses MySQL and a dedicated database (`testing` by default, see `phpunit.xml`
+and `.env.testing`). It is wiped on every run (`RefreshDatabase`); `tests/TestCase.php`
+refuses to run against `employees_management`. Tests build their data with factories
+and never depend on the imported dataset.
+
+Tests need the Composer **dev** dependencies (PHPUnit, Faker, …). The Docker app image is
+built with `composer install --no-dev`, so `docker compose exec app php artisan test`
+does not work. Run them with a local PHP 8.2+ / Composer against the Docker MySQL:
+
+```bash
+composer install
+docker compose --env-file .env.docker exec db \
+    sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS testing"'
+DB_HOST=127.0.0.1 DB_PORT=<FORWARD_DB_PORT> DB_USERNAME=root DB_PASSWORD=root php artisan test
+```
+
+Any other MySQL 8 server works the same way – set the `DB_*` variables (environment
+variables take precedence over `phpunit.xml` / `.env.testing`).
 
 ## API Endpoints
 
