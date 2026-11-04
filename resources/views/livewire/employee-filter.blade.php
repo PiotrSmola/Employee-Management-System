@@ -55,12 +55,22 @@
 
                 <div class="col-md-6 col-lg-3">
                     <label class="form-label fw-semibold text-body-emphasis">Department</label>
-                    <select class="form-select" wire:model.live="department">
-                        <option value="all">All Departments</option>
-                        @foreach ($departments as $dept)
-                            <option value="{{ $dept->dept_no }}">{{ $dept->dept_name }}</option>
-                        @endforeach
-                    </select>
+                    @if ($departmentLocked)
+                        <select class="form-select" disabled title="{{ __('Managers see the employees of their own department') }}">
+                            @forelse ($departments as $dept)
+                                <option selected>{{ $dept->dept_name }}</option>
+                            @empty
+                                <option selected>{{ __('No department assigned') }}</option>
+                            @endforelse
+                        </select>
+                    @else
+                        <select class="form-select" wire:model.live="department">
+                            <option value="all">All Departments</option>
+                            @foreach ($departments as $dept)
+                                <option value="{{ $dept->dept_no }}">{{ $dept->dept_name }}</option>
+                            @endforeach
+                        </select>
+                    @endif
                 </div>
 
                 <div class="col-md-6 col-lg-3">
@@ -73,6 +83,7 @@
                     </select>
                 </div>
 
+                @if ($canSeeSalaries)
                 <div class="col-md-6 col-lg-3">
                     <label class="form-label fw-semibold text-body-emphasis">Salary Range</label>
                     <div class="row g-1">
@@ -86,6 +97,7 @@
                         </div>
                     </div>
                 </div>
+                @endif
             </div>
 
             <div class="row mt-3">

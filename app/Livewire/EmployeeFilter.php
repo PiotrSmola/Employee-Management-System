@@ -3,18 +3,26 @@
 namespace App\Livewire;
 
 use App\Models\Department;
+use App\Support\EmployeeVisibility;
 use Illuminate\Support\Facades\DB;
 use Livewire\Component;
 
 class EmployeeFilter extends Component
 {
     public $search = '';
+
     public $employmentStatus = 'all';
+
     public $gender = 'all';
+
     public $department = 'all';
+
     public $salaryMin = '';
+
     public $salaryMax = '';
+
     public $jobTitle = 'all';
+
     public $showFilters = false;
 
     protected $listeners = ['resetFilters' => 'resetAllFilters'];
@@ -28,6 +36,13 @@ class EmployeeFilter extends Component
         $this->salaryMin = $salaryMin;
         $this->salaryMax = $salaryMax;
         $this->jobTitle = $jobTitle;
+
+        // A manager's list is always limited to their department (enforced by
+        // EmployeeList); show that department as the selected, locked filter.
+        $visibility = EmployeeVisibility::current();
+        if ($visibility->isDepartmentScoped()) {
+            $this->department = $visibility->department() ?? EmployeeVisibility::NO_DEPARTMENT;
+        }
     }
 
     public function updatedSearch()
@@ -75,6 +90,11 @@ class EmployeeFilter extends Component
         $this->salaryMax = '';
         $this->jobTitle = 'all';
 
+        $visibility = EmployeeVisibility::current();
+        if ($visibility->isDepartmentScoped()) {
+            $this->department = $visibility->department() ?? EmployeeVisibility::NO_DEPARTMENT;
+        }
+
         $this->dispatch('filtersUpdated', $this->getFilters());
     }
 
@@ -93,12 +113,18 @@ class EmployeeFilter extends Component
 
     public function render()
     {
-        $departments = Department::orderBy('dept_name')->get();
+        $visibility = EmployeeVisibility::current();
+
+        $departments = Department::orderBy('dept_name')
+            ->when($visibility->isDepartmentScoped(), fn ($q) => $q->where('dept_no', $visibility->department() ?? EmployeeVisibility::NO_DEPARTMENT))
+            ->get();
         $jobTitles = DB::table('titles')->select('title')->distinct()->orderBy('title')->get();
 
         return view('livewire.employee-filter', [
             'departments' => $departments,
-            'jobTitles' => $jobTitles
+            'jobTitles' => $jobTitles,
+            'departmentLocked' => $visibility->isDepartmentScoped(),
+            'canSeeSalaries' => $visibility->canSeeSalaries(),
         ]);
     }
 }

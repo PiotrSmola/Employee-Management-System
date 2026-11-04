@@ -2,8 +2,8 @@
 
 namespace App\Http\Controllers;
 
-use App\Queries\EmployeeSearchQuery;
 use App\Services\EmployeeExportService;
+use App\Support\EmployeeVisibility;
 use Illuminate\Http\Request;
 
 class ExportController extends Controller
@@ -14,7 +14,10 @@ class ExportController extends Controller
 
     public function export(Request $request)
     {
-        $query = EmployeeSearchQuery::make($request->only([
+        // Route is behind `can:export-data`; the manager's department scope and the
+        // salary rules are applied to the filters (ids outside the scope are dropped).
+        $visibility = EmployeeVisibility::for($request->user());
+        $query = $visibility->query($request->only([
             'search', 'employmentStatus', 'gender', 'department', 'jobTitle',
             'salaryMin', 'salaryMax', 'sortBy', 'sortDirection',
         ]));
@@ -33,7 +36,7 @@ class ExportController extends Controller
         }
 
         return $request->input('format') === 'pdf'
-            ? $this->exports->pdf($query)
-            : $this->exports->csv($query);
+            ? $this->exports->pdf($query, $visibility->canSeeSalaries())
+            : $this->exports->csv($query, $visibility->canSeeSalaries());
     }
 }

@@ -17,6 +17,10 @@ class EmployeeProfileService
     public const CURRENT_TO_DATE = '9999-01-01';
 
     /**
+     * Without $withSalaries (no `view-salaries` ability) no salary row is read
+     * at all: the salary history, chart, earnings and current salary are empty,
+     * and the combined history is built from the title periods instead.
+     *
      * @return array{
      *     employee: Employee,
      *     departmentHistory: Collection,
@@ -24,18 +28,25 @@ class EmployeeProfileService
      *     salaryHistory: Collection,
      *     combinedHistory: Collection,
      *     stats: array<string, mixed>,
-     *     salaryChartData: Collection
+     *     salaryChartData: Collection,
+     *     canSeeSalaries: bool
      * }
      *
      * @throws \Illuminate\Database\Eloquent\ModelNotFoundException
      */
-    public function build(int|string $empNo): array
+    public function build(Employee|int|string $employee, bool $withSalaries = true): array
     {
-        $employee = Employee::with([
-            'currentDepartment',
-            'currentTitle',
-            'currentSalary',
-        ])->findOrFail($empNo);
+        $relations = $withSalaries
+            ? ['currentDepartment', 'currentTitle', 'currentSalary']
+            : ['currentDepartment', 'currentTitle'];
+
+        $employee = $employee instanceof Employee
+            ? $employee->loadMissing($relations)
+            : Employee::with($relations)->findOrFail($employee);
+
+        if (! $withSalaries) {
+            $employee->setRelation('currentSalary', null);
+        }
 
         $departmentHistory = DB::table('dept_emp')
             ->join('departments', 'dept_emp.dept_no', '=', 'departments.dept_no')
@@ -50,48 +61,64 @@ class EmployeeProfileService
             ->orderBy('from_date')
             ->get();
 
-        $salaryHistory = DB::table('salaries')
-            ->where('emp_no', $employee->emp_no)
-            ->select('salary', 'from_date', 'to_date')
-            ->orderBy('from_date')
-            ->get();
+        $salaryHistory = $withSalaries
+            ? DB::table('salaries')
+                ->where('emp_no', $employee->emp_no)
+                ->select('salary', 'from_date', 'to_date')
+                ->orderBy('from_date')
+                ->get()
+            : collect();
+
+        $stats = $this->stats($employee, $departmentHistory, $titleHistory, $salaryHistory);
+
+        if (! $withSalaries) {
+            $stats['totalEarnings'] = null;
+            $stats['avgSalary'] = null;
+            $stats['salaryChanges'] = null;
+        }
 
         return [
             'employee' => $employee,
             'departmentHistory' => $departmentHistory,
             'titleHistory' => $titleHistory,
             'salaryHistory' => $salaryHistory,
-            'combinedHistory' => $this->combinedHistory($departmentHistory, $titleHistory, $salaryHistory),
-            'stats' => $this->stats($employee, $departmentHistory, $titleHistory, $salaryHistory),
-            'salaryChartData' => $this->salaryChartData($salaryHistory),
+            'combinedHistory' => $withSalaries
+                ? $this->combinedHistory($departmentHistory, $titleHistory, $salaryHistory)
+                : $this->combinedHistory($departmentHistory, $titleHistory, null),
+            'stats' => $stats,
+            'salaryChartData' => $withSalaries ? $this->salaryChartData($salaryHistory) : collect(),
+            'canSeeSalaries' => $withSalaries,
         ];
     }
 
     /**
      * One row per salary period, enriched with the department and title that
      * overlapped it. Newest first.
+     *
+     * Without a salary history (salaries hidden) there is one row per title
+     * period instead, with `salary` = null.
      */
-    public function combinedHistory(Collection $departmentHistory, Collection $titleHistory, Collection $salaryHistory): Collection
+    public function combinedHistory(Collection $departmentHistory, Collection $titleHistory, ?Collection $salaryHistory): Collection
     {
-        $combined = $salaryHistory->map(function ($salary) use ($departmentHistory, $titleHistory) {
-            $from = Carbon::parse($salary->from_date);
-            $to = $this->endDate($salary->to_date);
+        $combined = ($salaryHistory ?? $titleHistory)->map(function ($period) use ($departmentHistory, $titleHistory, $salaryHistory) {
+            $from = Carbon::parse($period->from_date);
+            $to = $this->endDate($period->to_date);
 
             $department = $departmentHistory->first(fn ($dept) => $this->overlaps(
                 $from, $to, Carbon::parse($dept->from_date), $this->endDate($dept->to_date)
             ));
 
-            $title = $titleHistory->first(fn ($item) => $this->overlaps(
+            $title = $salaryHistory === null ? $period : $titleHistory->first(fn ($item) => $this->overlaps(
                 $from, $to, Carbon::parse($item->from_date), $this->endDate($item->to_date)
             ));
 
             return (object) [
-                'from_date' => $salary->from_date,
-                'to_date' => $salary->to_date,
-                'salary' => $salary->salary,
+                'from_date' => $period->from_date,
+                'to_date' => $period->to_date,
+                'salary' => $salaryHistory === null ? null : $period->salary,
                 'department_name' => $department ? $department->dept_name : 'Unknown',
                 'title' => $title ? $title->title : 'Unknown',
-                'is_current' => $salary->to_date === self::CURRENT_TO_DATE,
+                'is_current' => $period->to_date === self::CURRENT_TO_DATE,
             ];
         });
 

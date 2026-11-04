@@ -40,15 +40,17 @@
                 </div>
             </div>
 
-            <div class="col-md-3">
-                <div class="card gradient-card-3 text-white h-100">
-                    <div class="card-body text-center">
-                        <i class="bi bi-currency-dollar display-4 mb-3 opacity-75"></i>
-                        <h3 class="card-title fw-bold">${{ number_format($averageSalary, 0) }}</h3>
-                        <p class="card-text opacity-90">Average Salary</p>
+            @if ($averageSalary !== null)
+                <div class="col-md-3">
+                    <div class="card gradient-card-3 text-white h-100">
+                        <div class="card-body text-center">
+                            <i class="bi bi-currency-dollar display-4 mb-3 opacity-75"></i>
+                            <h3 class="card-title fw-bold">${{ number_format($averageSalary, 0) }}</h3>
+                            <p class="card-text opacity-90">Average Salary</p>
+                        </div>
                     </div>
                 </div>
-            </div>
+            @endif
         </div>
 
         <!-- Buttons -->

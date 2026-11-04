@@ -68,7 +68,7 @@
                                     <p class="mb-1 opacity-90">{{ $employee->currentTitle->title }}</p>
                                 @endif
 
-                                @if ($employee->currentSalary)
+                                @if ($canSeeSalaries && $employee->currentSalary)
                                     <h5 class="mb-0">
                                         <i class="bi bi-currency-dollar me-1"></i>
                                         {{ number_format($employee->currentSalary->salary) }} USD
@@ -81,25 +81,27 @@
             </div>
         </div>
 
-        <div class="row g-3 mb-4">
-            <div class="col-md-3">
-                <div class="card gradient-card-2 text-white h-100">
-                    <div class="card-body text-center">
-                        <i class="bi bi-currency-dollar display-4 mb-2 opacity-75"></i>
-                        <h4>${{ number_format($stats['totalEarnings']) }}</h4>
-                        <p class="mb-0 opacity-90">Total Earnings</p>
+        <div class="row g-3 mb-4 justify-content-center">
+            @if ($canSeeSalaries)
+                <div class="col-md-3">
+                    <div class="card gradient-card-2 text-white h-100">
+                        <div class="card-body text-center">
+                            <i class="bi bi-currency-dollar display-4 mb-2 opacity-75"></i>
+                            <h4>${{ number_format($stats['totalEarnings']) }}</h4>
+                            <p class="mb-0 opacity-90">Total Earnings</p>
+                        </div>
                     </div>
                 </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card gradient-card-3 text-white h-100">
-                    <div class="card-body text-center">
-                        <i class="bi bi-graph-up display-4 mb-2 opacity-75"></i>
-                        <h4>${{ number_format($stats['avgSalary']) }}</h4>
-                        <p class="mb-0 opacity-90">Average Salary</p>
+                <div class="col-md-3">
+                    <div class="card gradient-card-3 text-white h-100">
+                        <div class="card-body text-center">
+                            <i class="bi bi-graph-up display-4 mb-2 opacity-75"></i>
+                            <h4>${{ number_format($stats['avgSalary']) }}</h4>
+                            <p class="mb-0 opacity-90">Average Salary</p>
+                        </div>
                     </div>
                 </div>
-            </div>
+            @endif
             <div class="col-md-3">
                 <div class="card gradient-card-4 text-white h-100">
                     <div class="card-body text-center">
@@ -165,8 +167,13 @@
                             <i class="bi bi-clock-history me-2 text-primary"></i>
                             Employment History
                         </h5>
-                        <p class="mb-0 text-muted small">Table showing salary changes with corresponding job titles
-                            and departments</p>
+                        <p class="mb-0 text-muted small">
+                            @if ($canSeeSalaries)
+                                Table showing salary changes with corresponding job titles and departments
+                            @else
+                                Table showing job titles with corresponding departments
+                            @endif
+                        </p>
                     </div>
                     <div class="card-body p-0">
                         <div class="table-responsive">
@@ -174,7 +181,9 @@
                                 <thead class="table-primary">
                                     <tr>
                                         <th scope="col" style="width: 20%;">Period</th>
-                                        <th scope="col" style="width: 25%;">Salary</th>
+                                        @if ($canSeeSalaries)
+                                            <th scope="col" style="width: 25%;">Salary</th>
+                                        @endif
                                         <th scope="col" style="width: 27.5%;">Job Title</th>
                                         <th scope="col" style="width: 27.5%;">Department</th>
                                     </tr>
@@ -195,14 +204,16 @@
                                                     @endif
                                                 </small>
                                             </td>
-                                            <td>
-                                                <span class="badge bg-salary fs-6">
-                                                    ${{ number_format($history->salary) }}
-                                                </span>
-                                                @if ($history->is_current)
-                                                    <br><small class="text-success fw-semibold">Current Salary</small>
-                                                @endif
-                                            </td>
+                                            @if ($canSeeSalaries)
+                                                <td>
+                                                    <span class="badge bg-salary fs-6">
+                                                        ${{ number_format($history->salary) }}
+                                                    </span>
+                                                    @if ($history->is_current)
+                                                        <br><small class="text-success fw-semibold">Current Salary</small>
+                                                    @endif
+                                                </td>
+                                            @endif
                                             <td>
                                                 <div class="fw-medium">{{ $history->title }}</div>
                                                 @if ($history->is_current)
@@ -223,7 +234,7 @@
                                         </tr>
                                     @empty
                                         <tr>
-                                            <td colspan="4" class="text-center py-4 text-muted">
+                                            <td colspan="{{ $canSeeSalaries ? 4 : 3 }}" class="text-center py-4 text-muted">
                                                 <i class="bi bi-info-circle display-4 d-block mb-2"></i>
                                                 <p class="mb-0">No employment history available</p>
                                             </td>

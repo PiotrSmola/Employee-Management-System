@@ -461,27 +461,42 @@ class EmployeeSearchQuery
      */
     private function whereEffectiveDepartment(Builder $query, string $deptNo, string $status, bool $perRow): Builder
     {
-        return $query->whereIn('e.emp_no', function ($q) use ($deptNo, $status, $perRow) {
-            $this->subSelect($q, 'de_f.emp_no', $perRow)
-                ->from('dept_emp as de_f')
-                ->where('de_f.dept_no', $deptNo);
+        return $query->whereIn('e.emp_no', fn ($q) => self::departmentMembership(
+            $this->subSelect($q, 'de_f.emp_no', $perRow)->from('dept_emp as de_f'),
+            $deptNo,
+            $status
+        ));
+    }
 
-            $isLast = function ($w) {
-                $w->where('de_f.to_date', '<>', self::CURRENT)
-                    ->whereNotExists(fn ($later) => $later->select(DB::raw(1))
-                        ->from('dept_emp as de_l')
-                        ->whereColumn('de_l.emp_no', 'de_f.emp_no')
-                        ->where(fn ($o) => $o->whereColumn('de_l.to_date', '>', 'de_f.to_date')
-                            ->orWhere(fn ($t) => $t->whereColumn('de_l.to_date', '=', 'de_f.to_date')
-                                ->whereColumn('de_l.dept_no', '<', 'de_f.dept_no'))));
-            };
+    /**
+     * Restrict a query on `dept_emp as de_f` (the alias is required) to the rows
+     * that make an employee belong to $deptNo: the current assignment, or - for
+     * employees without a current department - the last one (latest to_date,
+     * ties: lowest dept_no). Optionally only current / only former employees.
+     * Selecting `de_f.emp_no` gives each member exactly once.
+     *
+     * This is the definition of "employee of a department" used by the
+     * department filter and by the manager scope ({@see \App\Support\EmployeeVisibility}).
+     */
+    public static function departmentMembership(Builder $deptEmp, string $deptNo, string $status = 'all'): Builder
+    {
+        $deptEmp->where('de_f.dept_no', $deptNo);
 
-            match ($status) {
-                'current' => $q->where('de_f.to_date', self::CURRENT),
-                'former' => $q->where($isLast),
-                default => $q->where(fn ($w) => $w->where('de_f.to_date', self::CURRENT)->orWhere($isLast)),
-            };
-        });
+        $isLast = function ($w) {
+            $w->where('de_f.to_date', '<>', self::CURRENT)
+                ->whereNotExists(fn ($later) => $later->select(DB::raw(1))
+                    ->from('dept_emp as de_l')
+                    ->whereColumn('de_l.emp_no', 'de_f.emp_no')
+                    ->where(fn ($o) => $o->whereColumn('de_l.to_date', '>', 'de_f.to_date')
+                        ->orWhere(fn ($t) => $t->whereColumn('de_l.to_date', '=', 'de_f.to_date')
+                            ->whereColumn('de_l.dept_no', '<', 'de_f.dept_no'))));
+        };
+
+        return match ($status) {
+            'current' => $deptEmp->where('de_f.to_date', self::CURRENT),
+            'former' => $deptEmp->where($isLast),
+            default => $deptEmp->where(fn ($w) => $w->where('de_f.to_date', self::CURRENT)->orWhere($isLast)),
+        };
     }
 
     /**

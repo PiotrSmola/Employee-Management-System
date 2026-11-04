@@ -9,16 +9,19 @@
                 <i class="bi bi-info-circle me-1"></i>
                 {{ $employees->total() }} employee(s) found
             </div>
-            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#exportModal"
-                data-selected-count="{{ $selectedCount }}" data-total-count="{{ $employees->total() }}"
-                id="exportTriggerBtn">
-                <i class="bi bi-download me-1"></i>
-                Export Selected (<span id="exportCountDisplay">{{ $selectedCount }}</span>)
-            </button>
+            @if ($canExport)
+                <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#exportModal"
+                    data-selected-count="{{ $selectedCount }}" data-total-count="{{ $employees->total() }}"
+                    id="exportTriggerBtn">
+                    <i class="bi bi-download me-1"></i>
+                    Export Selected (<span id="exportCountDisplay">{{ $selectedCount }}</span>)
+                </button>
+            @endif
         </div>
     </div>
 
-    <!-- Selection Controls -->
+    @if ($canExport)
+    <!-- Selection Controls (the selection is what gets exported) -->
     <div class="card mb-3">
         <div class="card-body py-2">
             <div class="d-flex align-items-center justify-content-between">
@@ -41,6 +44,7 @@
             </div>
         </div>
     </div>
+    @endif
 
     <div wire:loading class="text-center py-3">
         <div class="spinner-border text-primary" role="status">
@@ -55,9 +59,11 @@
                 <table class="table table-hover mb-0">
                     <thead class="table-primary">
                         <tr>
-                            <th scope="col" style="width: 50px;">
-                                <i class="bi bi-check-square"></i>
-                            </th>
+                            @if ($canExport)
+                                <th scope="col" style="width: 50px;">
+                                    <i class="bi bi-check-square"></i>
+                                </th>
+                            @endif
                             <th scope="col" wire:click="sortByField('emp_no')" class="sortable-header">
                                 Employee #
                                 @if ($sortBy === 'emp_no')
@@ -90,27 +96,31 @@
                                     <i class="bi bi-arrow-up-down ms-1 opacity-50"></i>
                                 @endif
                             </th>
-                            <th scope="col" wire:click="sortByField('salary')" class="sortable-header">
-                                Current Salary
-                                @if ($sortBy === 'salary')
-                                    <i class="bi bi-arrow-{{ $sortDirection === 'asc' ? 'up' : 'down' }} ms-1"></i>
-                                @else
-                                    <i class="bi bi-arrow-up-down ms-1 opacity-50"></i>
-                                @endif
-                            </th>
+                            @if ($canSeeSalaries)
+                                <th scope="col" wire:click="sortByField('salary')" class="sortable-header">
+                                    Current Salary
+                                    @if ($sortBy === 'salary')
+                                        <i class="bi bi-arrow-{{ $sortDirection === 'asc' ? 'up' : 'down' }} ms-1"></i>
+                                    @else
+                                        <i class="bi bi-arrow-up-down ms-1 opacity-50"></i>
+                                    @endif
+                                </th>
+                            @endif
                         </tr>
                     </thead>
                     <tbody>
                         @forelse($employees as $employee)
                             <tr class="employee-row">
-                                <td>
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="checkbox"
-                                            {{ $employee->isSelected ? 'checked' : '' }}
-                                            wire:click="toggleEmployee({{ $employee->emp_no }})"
-                                            onclick="event.stopPropagation()">
-                                    </div>
-                                </td>
+                                @if ($canExport)
+                                    <td>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox"
+                                                {{ $employee->isSelected ? 'checked' : '' }}
+                                                wire:click="toggleEmployee({{ $employee->emp_no }})"
+                                                onclick="event.stopPropagation()">
+                                        </div>
+                                    </td>
+                                @endif
                                 <td class="emp-number">{{ $employee->emp_no }}</td>
                                 <td style="cursor: pointer;"
                                     onclick="window.location='{{ route('employees.show', $employee->emp_no) }}'">
@@ -153,20 +163,22 @@
                                         <span class="text-muted">-</span>
                                     @endif
                                 </td>
-                                <td style="cursor: pointer;"
-                                    onclick="window.location='{{ route('employees.show', $employee->emp_no) }}'">
-                                    @if ($employee->currentSalary)
-                                        <span class="badge bg-salary">
-                                            ${{ number_format($employee->currentSalary->salary) }}
-                                        </span>
-                                    @else
-                                        <span class="text-muted">-</span>
-                                    @endif
-                                </td>
+                                @if ($canSeeSalaries)
+                                    <td style="cursor: pointer;"
+                                        onclick="window.location='{{ route('employees.show', $employee->emp_no) }}'">
+                                        @if ($employee->currentSalary)
+                                            <span class="badge bg-salary">
+                                                ${{ number_format($employee->currentSalary->salary) }}
+                                            </span>
+                                        @else
+                                            <span class="text-muted">-</span>
+                                        @endif
+                                    </td>
+                                @endif
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="6" class="text-center py-4 text-muted">
+                                <td colspan="{{ 4 + ($canExport ? 1 : 0) + ($canSeeSalaries ? 1 : 0) }}" class="text-center py-4 text-muted">
                                     <i class="bi bi-search display-4 d-block mb-2"></i>
                                     <p class="mb-0">No employees found matching your criteria</p>
                                     <button class="btn btn-sm btn-outline-primary mt-2"

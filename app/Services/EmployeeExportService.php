@@ -19,8 +19,9 @@ class EmployeeExportService
 
     /**
      * Stream every matching employee as CSV, in the list's sort order.
+     * Without $withSalaries the salary and earnings columns are left out.
      */
-    public function csv(EmployeeSearchQuery $query): Response
+    public function csv(EmployeeSearchQuery $query, bool $withSalaries = true): Response
     {
         set_time_limit(600);
 
@@ -32,30 +33,33 @@ class EmployeeExportService
 
         $filename = 'employees_export_selected_'.count($ids).'_'.date('Y-m-d_H-i-s').'.csv';
 
-        return new StreamedResponse(function () use ($query, $ids) {
+        return new StreamedResponse(function () use ($query, $ids, $withSalaries) {
             $handle = fopen('php://output', 'w');
             fwrite($handle, "\xEF\xBB\xBF");
 
-            fputcsv($handle, [
+            fputcsv($handle, $this->withoutSalaryColumns([
                 __('Employee ID'),
                 __('First Name'),
                 __('Last Name'),
                 __('Full Name'),
                 __('Department'),
                 __('Job Title'),
-                __('Current Salary'),
-                __('Total Earnings'),
+                'salary' => __('Current Salary'),
+                'earnings' => __('Total Earnings'),
                 __('Hire Date'),
                 __('Gender'),
                 __('Employment Status'),
-            ]);
+            ], $withSalaries));
 
             foreach (array_chunk($ids, self::CSV_CHUNK) as $chunk) {
                 $rows = $query->rowsFor($chunk);
-                $earnings = $this->totalEarnings($chunk);
+                $earnings = $withSalaries ? $this->totalEarnings($chunk) : [];
 
                 foreach ($rows as $employee) {
-                    fputcsv($handle, $this->csvRow($employee, $earnings[$employee->emp_no] ?? 0));
+                    fputcsv($handle, $this->withoutSalaryColumns(
+                        $this->csvRow($employee, $earnings[$employee->emp_no] ?? 0),
+                        $withSalaries
+                    ));
                 }
             }
 
@@ -68,8 +72,9 @@ class EmployeeExportService
 
     /**
      * Render up to PDF_LIMIT matching employees into a landscape PDF.
+     * Without $withSalaries the salary and earnings columns are left out.
      */
-    public function pdf(EmployeeSearchQuery $query): Response
+    public function pdf(EmployeeSearchQuery $query, bool $withSalaries = true): Response
     {
         set_time_limit(600);
         ini_set('memory_limit', '2G');
@@ -80,7 +85,7 @@ class EmployeeExportService
             return back()->with('error', __('No employees found for export.'));
         }
 
-        $earnings = $this->totalEarnings($ids);
+        $earnings = $withSalaries ? $this->totalEarnings($ids) : [];
         $employees = $query->rowsFor($ids)->map(fn ($employee) => (object) [
             'emp_no' => $employee->emp_no,
             'first_name' => $employee->first_name,
@@ -89,10 +94,10 @@ class EmployeeExportService
             'gender' => $employee->gender,
             'current_dept_name' => $employee->current_dept_name,
             'current_title' => $employee->current_title,
-            'current_salary' => $employee->current_salary,
+            'current_salary' => $withSalaries ? $employee->current_salary : null,
             'last_dept_name' => $employee->last_dept_name,
             'last_job_title' => $employee->last_job_title,
-            'total_earnings' => $earnings[$employee->emp_no] ?? 0,
+            'total_earnings' => $withSalaries ? ($earnings[$employee->emp_no] ?? 0) : null,
         ]);
 
         try {
@@ -103,6 +108,7 @@ class EmployeeExportService
                 'selectedCount' => count($ids),
                 'isLimited' => $employees->count() >= self::PDF_LIMIT,
                 'filters' => $query->filters(),
+                'withSalaries' => $withSalaries,
             ])
                 ->setPaper('A4', 'landscape')
                 ->setOptions([
@@ -140,7 +146,22 @@ class EmployeeExportService
     }
 
     /**
+     * Drop the entries keyed 'salary' / 'earnings' unless salaries may be shown.
+     *
+     * @param  array<int|string, mixed>  $columns
      * @return array<int, mixed>
+     */
+    private function withoutSalaryColumns(array $columns, bool $withSalaries): array
+    {
+        if (! $withSalaries) {
+            unset($columns['salary'], $columns['earnings']);
+        }
+
+        return array_values($columns);
+    }
+
+    /**
+     * @return array<int|string, mixed>
      */
     private function csvRow(object $employee, int|float|string $totalEarnings): array
     {
@@ -165,8 +186,8 @@ class EmployeeExportService
             $employee->first_name.' '.$employee->last_name,
             $department,
             $title,
-            $employee->current_salary ? number_format($employee->current_salary, 2, '.', '') : 'N/A',
-            number_format((float) $totalEarnings, 2, '.', ''),
+            'salary' => $employee->current_salary ? number_format($employee->current_salary, 2, '.', '') : 'N/A',
+            'earnings' => number_format((float) $totalEarnings, 2, '.', ''),
             date('Y-m-d', strtotime($employee->hire_date)),
             $employee->gender === 'M' ? __('Male') : __('Female'),
             $employee->current_dept_name ? __('Active') : __('Former'),

@@ -4,6 +4,9 @@ namespace App\Livewire;
 
 use App\Queries\EmployeeFilters;
 use App\Queries\EmployeeSearchQuery;
+use App\Support\Ability;
+use App\Support\EmployeeVisibility;
+use Illuminate\Support\Facades\Gate;
 use Livewire\Attributes\Locked;
 use Livewire\Component;
 use Livewire\WithPagination;
@@ -75,6 +78,10 @@ class EmployeeList extends Component
     public function sortByField($field)
     {
         if (! in_array($field, EmployeeFilters::SORTABLE, true)) {
+            return;
+        }
+
+        if ($field === 'salary' && ! $this->visibility()->canSeeSalaries()) {
             return;
         }
 
@@ -185,8 +192,8 @@ class EmployeeList extends Component
             'gender' => $filters->gender,
             'department' => $filters->department,
             'jobTitle' => $filters->jobTitle,
-            'salaryMin' => $this->salaryMin,
-            'salaryMax' => $this->salaryMax,
+            'salaryMin' => $filters->salaryMin ?? '',
+            'salaryMax' => $filters->salaryMax ?? '',
             'sortBy' => $filters->sortBy,
             'sortDirection' => $filters->sortDirection,
             'selectAll' => (bool) $this->selectAll,
@@ -198,9 +205,14 @@ class EmployeeList extends Component
 
     public function render()
     {
+        $canSeeSalaries = $this->visibility()->canSeeSalaries();
         $employees = $this->searchQuery()->paginate(self::PER_PAGE, $this->getPage(), $this->getTotalEmployees());
 
-        $employees->through(function ($emp) {
+        $employees->through(function ($emp) use ($canSeeSalaries) {
+            if (! $canSeeSalaries) {
+                $emp->current_salary = null;
+            }
+
             return (object) [
                 'emp_no' => $emp->emp_no,
                 'first_name' => $emp->first_name,
@@ -222,12 +234,18 @@ class EmployeeList extends Component
         return view('livewire.employee-list', [
             'employees' => $employees,
             'selectedCount' => $this->getSelectedCount(),
+            'canSeeSalaries' => $canSeeSalaries,
+            'canExport' => Gate::allows(Ability::EXPORT_DATA),
         ]);
     }
 
+    /**
+     * The applied filters: the component's properties with the user's
+     * restrictions (manager department, salary rules) enforced.
+     */
     public function filters(): EmployeeFilters
     {
-        return EmployeeFilters::fromArray([
+        return $this->visibility()->filters([
             'search' => $this->search,
             'employmentStatus' => $this->employmentStatus,
             'gender' => $this->gender,
@@ -243,6 +261,11 @@ class EmployeeList extends Component
     private function searchQuery(): EmployeeSearchQuery
     {
         return EmployeeSearchQuery::make($this->filters());
+    }
+
+    private function visibility(): EmployeeVisibility
+    {
+        return EmployeeVisibility::current();
     }
 
     private function toggleIn(array $list, int $empNo): array

@@ -51,6 +51,16 @@ final class EmployeeFilters
         );
     }
 
+    /**
+     * Copy with some values replaced (values are taken as they are, not normalized).
+     *
+     * @param  array<string, mixed>  $changes  constructor argument name => value
+     */
+    public function with(array $changes): self
+    {
+        return new self(...array_merge(get_object_vars($this), $changes));
+    }
+
     public function hasSearch(): bool
     {
         return $this->search !== '';

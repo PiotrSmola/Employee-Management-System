@@ -11,7 +11,9 @@
 
     @include('layouts.footer', ['fixedBottom' => false])
 
-    @include('components.export-modal')
+    @can('export-data')
+        @include('components.export-modal')
+    @endcan
 
     @livewireScripts
 </body>

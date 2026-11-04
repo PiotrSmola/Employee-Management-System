@@ -141,8 +141,13 @@
     </div>
 
     <div class="stats"> <strong>Export Summary:</strong> This PDF contains detailed information about
-        {{ number_format($totalCount) }} employees including their current salary, job title, department, and total
-        earnings throughout their employment. </div>
+        {{ number_format($totalCount) }} employees including their
+        @if ($withSalaries ?? true)
+            current salary, job title, department, and total earnings throughout their employment.
+        @else
+            job title, department and employment status.
+        @endif
+    </div>
 
     <table>
         <thead>
@@ -151,8 +156,10 @@
                 <th style="width: 20%;">Full Name</th>
                 <th style="width: 15%;">Department</th>
                 <th style="width: 15%;">Job Title</th>
-                <th style="width: 10%;">Current Salary</th>
-                <th style="width: 12%;">Total Earnings</th>
+                @if ($withSalaries ?? true)
+                    <th style="width: 10%;">Current Salary</th>
+                    <th style="width: 12%;">Total Earnings</th>
+                @endif
                 <th style="width: 10%;">Hire Date</th>
                 <th style="width: 6%;">Gender</th>
                 <th style="width: 4%;">Status</th>
@@ -171,8 +178,10 @@
                 <th style="width: 20%;">Full Name</th>
                 <th style="width: 15%;">Department</th>
                 <th style="width: 15%;">Job Title</th>
-                <th style="width: 10%;">Current Salary</th>
-                <th style="width: 12%;">Total Earnings</th>
+                @if ($withSalaries ?? true)
+                    <th style="width: 10%;">Current Salary</th>
+                    <th style="width: 12%;">Total Earnings</th>
+                @endif
                 <th style="width: 10%;">Hire Date</th>
                 <th style="width: 6%;">Gender</th>
                 <th style="width: 4%;">Status</th>
@@ -201,14 +210,16 @@
                         <em>N/A</em>
                     @endif
                 </td>
-                <td>
-                    @if ($employee->current_salary)
-                        <span class="salary">${{ number_format($employee->current_salary) }}</span>
-                    @else
-                        <em>N/A</em>
-                    @endif
-                </td>
-                <td><strong>${{ number_format($employee->total_earnings) }}</strong></td>
+                @if ($withSalaries ?? true)
+                    <td>
+                        @if ($employee->current_salary)
+                            <span class="salary">${{ number_format($employee->current_salary) }}</span>
+                        @else
+                            <em>N/A</em>
+                        @endif
+                    </td>
+                    <td><strong>${{ number_format($employee->total_earnings) }}</strong></td>
+                @endif
                 <td>{{ \Carbon\Carbon::parse($employee->hire_date)->format('M d, Y') }}</td>
                 <td>
                     <span class="{{ $employee->gender === 'M' ? 'gender-male' : 'gender-female' }}">

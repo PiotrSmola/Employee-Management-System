@@ -433,7 +433,7 @@
                 @if ($employee->currentTitle)
                     <p class="opacity-90 mb-1">{{ $employee->currentTitle->title }}</p>
                 @endif
-                @if ($employee->currentSalary)
+                @if ($canSeeSalaries && $employee->currentSalary)
                     <h5 class="mb-0">${{ number_format($employee->currentSalary->salary) }} USD</h5>
                 @endif
             </div>
@@ -441,14 +441,16 @@
         </div>
 
         <div class="stats-container no-break">
-            <div class="stats-card" style="background: #f093fb;">
-                <h4>${{ number_format($stats['totalEarnings']) }}</h4>
-                <p class="mb-0 opacity-90" style="font-size: 8px;">Total Earnings</p>
-            </div>
-            <div class="stats-card" style="background: #4facfe;">
-                <h4>${{ number_format($stats['avgSalary']) }}</h4>
-                <p class="mb-0 opacity-90" style="font-size: 8px;">Average Salary</p>
-            </div>
+            @if ($canSeeSalaries)
+                <div class="stats-card" style="background: #f093fb;">
+                    <h4>${{ number_format($stats['totalEarnings']) }}</h4>
+                    <p class="mb-0 opacity-90" style="font-size: 8px;">Total Earnings</p>
+                </div>
+                <div class="stats-card" style="background: #4facfe;">
+                    <h4>${{ number_format($stats['avgSalary']) }}</h4>
+                    <p class="mb-0 opacity-90" style="font-size: 8px;">Average Salary</p>
+                </div>
+            @endif
             <div class="stats-card" style="background: #43e97b;">
                 @if ($stats['totalDays'] > 0)
                     @if ($stats['yearsEmployed'] > 0)
@@ -480,15 +482,22 @@
         <div class="allow-break">
             <div class="card-header">
                 <h5>Employment History</h5>
-                <p class="mb-0 text-muted" style="font-size: 7px;">Table showing salary changes with corresponding
-                    job titles and departments</p>
+                <p class="mb-0 text-muted" style="font-size: 7px;">
+                    @if ($canSeeSalaries)
+                        Table showing salary changes with corresponding job titles and departments
+                    @else
+                        Table showing job titles with corresponding departments
+                    @endif
+                </p>
             </div>
 
             <table class="history-table">
                 <thead>
                     <tr>
                         <th class="period-col">Period</th>
-                        <th class="salary-col">Salary</th>
+                        @if ($canSeeSalaries)
+                            <th class="salary-col">Salary</th>
+                        @endif
                         <th class="title-col">Job Title</th>
                         <th class="dept-col">Department</th>
                     </tr>
@@ -508,14 +517,16 @@
                                     @endif
                                 </div>
                             </td>
-                            <td class="salary-col">
-                                <span class="badge bg-salary">
-                                    ${{ number_format($history->salary) }}
-                                </span>
-                                @if ($history->is_current)
-                                    <div class="text-success fw-semibold" style="font-size: 6px;">Current Salary</div>
-                                @endif
-                            </td>
+                            @if ($canSeeSalaries)
+                                <td class="salary-col">
+                                    <span class="badge bg-salary">
+                                        ${{ number_format($history->salary) }}
+                                    </span>
+                                    @if ($history->is_current)
+                                        <div class="text-success fw-semibold" style="font-size: 6px;">Current Salary</div>
+                                    @endif
+                                </td>
+                            @endif
                             <td class="title-col">
                                 <div class="fw-medium">{{ $history->title }}</div>
                                 @if ($history->is_current)
@@ -536,7 +547,7 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="4" style="text-align: center; padding: 15px; color: #6c757d;">
+                            <td colspan="{{ $canSeeSalaries ? 4 : 3 }}" style="text-align: center; padding: 15px; color: #6c757d;">
                                 <div style="font-size: 8px;">No employment history available</div>
                             </td>
                         </tr>
