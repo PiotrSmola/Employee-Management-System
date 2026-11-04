@@ -68,6 +68,26 @@ class EmployeeListTest extends TestCase
         );
     }
 
+    public function test_employment_status_filter_counts_employees_without_current_department_as_former(): void
+    {
+        Employee::factory()->count(2)->current()->create(['gender' => 'F']);
+        Employee::factory()->former()->create(['gender' => 'F']);
+        Employee::factory()->create(['gender' => 'F']); // no department history at all
+
+        $filters = fn (string $status, string $gender = 'all') => [
+            'search' => '', 'employmentStatus' => $status, 'gender' => $gender, 'department' => 'all',
+            'salaryMin' => '', 'salaryMax' => '', 'jobTitle' => 'all',
+        ];
+
+        Livewire::test(EmployeeList::class)
+            ->call('updateFilters', $filters('current'))
+            ->assertSee('2 employee(s) found')
+            ->call('updateFilters', $filters('former'))
+            ->assertSee('2 employee(s) found')
+            ->call('updateFilters', $filters('former', 'F'))
+            ->assertSee('2 employee(s) found');
+    }
+
     public function test_selection_count_follows_select_all_and_exclusions(): void
     {
         $employees = Employee::factory()->count(3)->current()->create();

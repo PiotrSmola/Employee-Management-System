@@ -103,6 +103,19 @@ class EmployeeSearchQuery
 
     public function count(): int
     {
+        $f = $this->filters;
+        $onlyStatus = $f->employmentStatus !== 'all' && ! $f->hasSearch() && $f->gender === 'all'
+            && ! $f->filtersByDepartment() && ! $f->filtersByTitle() && ! $f->filtersBySalary()
+            && $this->onlyIds === null && $this->exceptIds === [];
+
+        if ($onlyStatus) {
+            // Index-only count instead of a (anti-)join over all employees;
+            // dept_emp.emp_no always references an existing employee (foreign key).
+            $current = DB::table('dept_emp')->where('to_date', self::CURRENT)->distinct()->count('emp_no');
+
+            return $f->employmentStatus === 'current' ? $current : DB::table('employees')->count() - $current;
+        }
+
         return $this->filtered()->count();
     }
 
