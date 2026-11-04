@@ -606,6 +606,50 @@
                 display: block;
             }
         }
+
+        /* Accounts: role badges, login page */
+        .role-badge {
+            font-size: 0.75rem;
+            padding: 0.35em 0.6em;
+        }
+
+        .navbar .dropdown-menu {
+            min-width: 15rem;
+        }
+
+        .auth-page {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem 1rem;
+            background:
+                radial-gradient(circle at 15% 20%, rgba(146, 0, 0, 0.18), transparent 45%),
+                radial-gradient(circle at 85% 80%, rgba(0, 42, 157, 0.20), transparent 45%);
+        }
+
+        .auth-card {
+            width: 100%;
+            max-width: 420px;
+            overflow: hidden;
+        }
+
+        .auth-card:hover {
+            transform: none;
+        }
+
+        .auth-card .auth-brand {
+            background: var(--primary-gradient);
+            color: #fff;
+            padding: 1.75rem 1.5rem;
+            text-align: center;
+        }
+
+        .auth-theme-toggle {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+        }
     </style>
 
     @livewireStyles
