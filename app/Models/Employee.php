@@ -10,7 +10,12 @@ class Employee extends Model
     use HasFactory;
 
     protected $table = 'employees';
+
     protected $primaryKey = 'emp_no';
+
+    // Natural keys from the dataset, not auto-increment.
+    public $incrementing = false;
+
     public $timestamps = false;
 
     protected $fillable = [
@@ -19,7 +24,7 @@ class Employee extends Model
         'first_name',
         'last_name',
         'gender',
-        'hire_date'
+        'hire_date',
     ];
 
     public function departments()

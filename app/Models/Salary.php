@@ -10,13 +10,19 @@ class Salary extends Model
     use HasFactory;
 
     protected $table = 'salaries';
+
+    // Composite primary key in the dataset; Eloquent only reads/inserts these rows.
+    protected $primaryKey = null;
+
+    public $incrementing = false;
+
     public $timestamps = false;
 
     protected $fillable = [
         'emp_no',
         'salary',
         'from_date',
-        'to_date'
+        'to_date',
     ];
 
     public function employee()
