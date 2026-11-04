@@ -42,7 +42,52 @@ A comprehensive web-based employee management platform built with Laravel 11, de
 - MySQL 8.0+ or PostgreSQL 13+
 - Web server (Apache/Nginx)
 
-## Installation
+## Quick Start with Docker (recommended)
+
+The only requirement is [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine with Compose v2). PHP, Composer and MySQL run inside containers.
+
+```bash
+git clone https://github.com/PiotrSmola/Employee-Management-System.git
+cd Employee-Management-System
+```
+
+**Windows (PowerShell):**
+```powershell
+.\docker-up.ps1
+```
+> If script execution is blocked, run: `powershell -ExecutionPolicy Bypass -File .\docker-up.ps1`
+
+**Linux / macOS / Git Bash:**
+```bash
+./docker-up.sh
+```
+
+The script:
+- picks free host ports – the app prefers `8000`, MySQL prefers `3306`; if a port is already taken it uses the next free one (it never stops anything that is already running),
+- generates an `APP_KEY` and saves the ports in `.env.docker` (git-ignored, reused on the next run),
+- builds the images and starts the containers,
+- on the first start imports the MySQL [employees sample database](https://github.com/datacharmer/test_db) (~300k employees, ~2.8M salary rows) – this takes a few minutes,
+- waits until the app responds and prints its URL.
+
+Preferred ports can be overridden: `.\docker-up.ps1 -AppPort 8080 -DbPort 3310` or `./docker-up.sh 8080 3310`.
+
+| Service | Container | Host port | Credentials |
+|---------|-----------|-----------|-------------|
+| App (Apache + PHP 8.3) | `app` | `APP_PORT` (default 8000) | – |
+| MySQL 8.0 | `db` | `FORWARD_DB_PORT` (default 3306) | db `employees_management`, user `laravel` / `secret`, root / `root` |
+
+Useful commands:
+```bash
+docker compose --env-file .env.docker logs -f        # follow logs
+docker compose --env-file .env.docker stop           # stop containers
+docker compose --env-file .env.docker down           # remove containers (data is kept)
+docker compose --env-file .env.docker down -v        # remove containers AND the database volume
+docker compose --env-file .env.docker exec app php artisan <command>
+```
+
+After code changes, run the start script again – it rebuilds the app image.
+
+## Manual Installation
 
 ### 1. Clone the Repository
 ```bash
