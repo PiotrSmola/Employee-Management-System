@@ -14,22 +14,6 @@
     @include('components.export-modal')
 
     @livewireScripts
-
-    <script>
-        document.addEventListener('livewire:initialized', function() {
-            function updateExportButton() {
-                const exportBtn = document.getElementById('exportTriggerBtn');
-                const countDisplay = document.getElementById('exportCountDisplay');
-
-            }
-
-            Livewire.on('livewire:updated', function(event) {
-                updateExportButton();
-            });
-
-            updateExportButton();
-        });
-    </script>
 </body>
 
 </html>
