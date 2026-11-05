@@ -86,6 +86,13 @@ class UserController extends Controller
 
     public function resetPassword(ResetPasswordRequest $request, User $user): RedirectResponse
     {
+        // The own password is changed under "My account", which asks for the current
+        // password (a reset here would also end the admin's own session).
+        if ($request->user()->is($user)) {
+            return redirect()->route('account.edit')
+                ->with('error', __('Change your own password here, under "My account".'));
+        }
+
         $this->users->resetPassword($user, $request->validated('password'));
 
         return redirect()->route('users.edit', $user)

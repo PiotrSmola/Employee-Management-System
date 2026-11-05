@@ -99,7 +99,7 @@
                                         @error('password')
                                             <div class="invalid-feedback">{{ $message }}</div>
                                         @enderror
-                                        <div class="form-text">{{ __('At least 8 characters.') }}</div>
+                                        <div class="form-text">{{ __('At least 10 characters, with letters and numbers.') }}</div>
                                     </div>
                                     <div class="col-md-6">
                                         <label for="password_confirmation" class="form-label fw-semibold">{{ __('Confirm password') }}</label>
@@ -141,7 +141,13 @@
             </div>
 
             <div class="col-lg-5">
-                @if ($editing)
+                @if ($self)
+                    <div class="alert alert-info mb-4">
+                        <i class="bi bi-key me-1"></i>
+                        {{ __('To change your own password use') }}
+                        <a href="{{ route('account.edit') }}" class="alert-link">{{ __('My account') }}</a>.
+                    </div>
+                @elseif ($editing)
                     <div class="card mb-4">
                         <div class="card-header">
                             <h5 class="mb-0 text-body-emphasis"><i class="bi bi-key me-2"></i>{{ __('Reset password') }}</h5>

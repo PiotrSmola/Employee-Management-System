@@ -100,7 +100,7 @@
                                 @error('password', 'password')
                                     <div class="invalid-feedback">{{ $message }}</div>
                                 @enderror
-                                <div class="form-text">{{ __('At least 8 characters.') }}</div>
+                                <div class="form-text">{{ __('At least 10 characters, with letters and numbers.') }}</div>
                             </div>
                             <div class="mb-3">
                                 <label for="password_confirmation" class="form-label fw-semibold">{{ __('Confirm new password') }}</label>

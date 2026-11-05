@@ -22,7 +22,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        Password::defaults(fn () => Password::min(8));
+        // No uncompromised() check: the application may run without internet access.
+        Password::defaults(fn () => Password::min(10)->letters()->numbers());
 
         // Livewire component updates (sorting, paging, filters, ...) need the
         // same signed-in, active user as the pages that render the components.

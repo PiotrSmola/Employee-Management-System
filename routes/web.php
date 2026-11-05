@@ -35,7 +35,9 @@ Route::middleware(['auth', 'auth.session', 'active'])->group(function () {
 
     Route::get('/account', [AccountController::class, 'edit'])->name('account.edit');
     Route::put('/account/profile', [AccountController::class, 'updateProfile'])->name('account.profile');
-    Route::put('/account/password', [AccountController::class, 'updatePassword'])->name('account.password');
+    Route::put('/account/password', [AccountController::class, 'updatePassword'])
+        ->middleware('throttle:5,1')
+        ->name('account.password');
 
     Route::middleware('can:'.Ability::MANAGE_USERS)->group(function () {
         Route::resource('users', UserController::class)->except('show');

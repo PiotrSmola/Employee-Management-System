@@ -54,8 +54,8 @@ class UserManagementTest extends TestCase
             'name' => 'Nina New',
             'email' => 'Nina@Example.com',
             'role' => 'viewer',
-            'password' => 'secret-pass',
-            'password_confirmation' => 'secret-pass',
+            'password' => 'secret-pass-42',
+            'password_confirmation' => 'secret-pass-42',
             'is_active' => '1',
             'dept_no' => 'd001',
         ])->assertRedirect(route('users.index'))->assertSessionHas('status');
@@ -64,7 +64,7 @@ class UserManagementTest extends TestCase
         $this->assertSame(Role::Viewer, $user->role);
         $this->assertNull($user->dept_no); // only managers keep a department
         $this->assertTrue($user->is_active);
-        $this->assertTrue(Hash::check('secret-pass', $user->password));
+        $this->assertTrue(Hash::check('secret-pass-42', $user->password));
     }
 
     public function test_create_validates_input(): void
@@ -83,7 +83,7 @@ class UserManagementTest extends TestCase
     public function test_manager_needs_an_existing_department(): void
     {
         $data = ['name' => 'Max', 'email' => 'max@example.com', 'role' => 'manager',
-            'password' => 'secret-pass', 'password_confirmation' => 'secret-pass'];
+            'password' => 'secret-pass-42', 'password_confirmation' => 'secret-pass-42'];
 
         $this->post(route('users.store'), $data)->assertSessionHasErrors('dept_no');
         $this->post(route('users.store'), $data + ['dept_no' => 'd999'])->assertSessionHasErrors('dept_no');
@@ -206,15 +206,15 @@ class UserManagementTest extends TestCase
         $user = User::factory()->create(['email' => 'reset@example.com']);
         $oldToken = $user->remember_token;
 
-        $this->put(route('users.password', $user), ['password' => 'brand-new-pass', 'password_confirmation' => 'nope'])
+        $this->put(route('users.password', $user), ['password' => 'brand-new-pass-42', 'password_confirmation' => 'nope'])
             ->assertSessionHasErrorsIn('resetPassword', 'password');
 
-        $this->put(route('users.password', $user), ['password' => 'brand-new-pass', 'password_confirmation' => 'brand-new-pass'])
+        $this->put(route('users.password', $user), ['password' => 'brand-new-pass-42', 'password_confirmation' => 'brand-new-pass-42'])
             ->assertRedirect(route('users.edit', $user))
             ->assertSessionHas('status');
 
         $user->refresh();
-        $this->assertTrue(Hash::check('brand-new-pass', $user->password));
+        $this->assertTrue(Hash::check('brand-new-pass-42', $user->password));
         $this->assertNotSame($oldToken, $user->remember_token);
     }
 

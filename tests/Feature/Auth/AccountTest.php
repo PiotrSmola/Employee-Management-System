@@ -56,8 +56,8 @@ class AccountTest extends TestCase
     {
         $this->put(route('account.password'), [
             'current_password' => 'wrong',
-            'password' => 'another-pass',
-            'password_confirmation' => 'another-pass',
+            'password' => 'another-pass-42',
+            'password_confirmation' => 'another-pass-42',
         ])->assertSessionHasErrorsIn('password', 'current_password');
 
         $this->assertTrue(Hash::check('password', $this->user->fresh()->password));
@@ -70,7 +70,7 @@ class AccountTest extends TestCase
         ])->assertSessionHasErrorsIn('password', 'password');
 
         $this->put(route('account.password'), [
-            'current_password' => 'password', 'password' => 'another-pass', 'password_confirmation' => 'different',
+            'current_password' => 'password', 'password' => 'another-pass-42', 'password_confirmation' => 'different',
         ])->assertSessionHasErrorsIn('password', 'password');
     }
 
@@ -78,11 +78,11 @@ class AccountTest extends TestCase
     {
         $this->put(route('account.password'), [
             'current_password' => 'password',
-            'password' => 'another-pass',
-            'password_confirmation' => 'another-pass',
+            'password' => 'another-pass-42',
+            'password_confirmation' => 'another-pass-42',
         ])->assertRedirect(route('account.edit'))->assertSessionHas('status');
 
-        $this->assertTrue(Hash::check('another-pass', $this->user->fresh()->password));
+        $this->assertTrue(Hash::check('another-pass-42', $this->user->fresh()->password));
         $this->assertAuthenticatedAs($this->user);
         $this->get(route('account.edit'))->assertOk();
     }
