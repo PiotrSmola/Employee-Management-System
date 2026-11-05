@@ -70,19 +70,45 @@ return new class extends Migration
         });
     }
 
+    /**
+     * Best-effort rollback to the original structure. NOT fully reversible:
+     *  - the merged full name stays in `name` (it cannot be split again);
+     *    last_name and phone_number come back empty;
+     *  - hr / manager / viewer accounts become "employee";
+     *  - remember_token and the timestamps are kept (harmless, and a standard
+     *    Laravel users table has them anyway).
+     * Only the columns this migration is known to add are dropped, and only if present.
+     */
     public function down(): void
     {
-        Schema::table('users', function (Blueprint $table) {
-            $table->dropIndex(['dept_no']);
-            $table->dropColumn(['dept_no', 'is_active', 'last_login_at', 'remember_token', 'created_at', 'updated_at']);
-        });
+        if (Schema::hasColumn('users', 'dept_no')) {
+            $indexed = collect(Schema::getIndexes('users'))->contains(fn (array $index) => $index['columns'] === ['dept_no']);
+
+            Schema::table('users', function (Blueprint $table) use ($indexed) {
+                if ($indexed) {
+                    $table->dropIndex(['dept_no']);
+                }
+                $table->dropColumn('dept_no');
+            });
+        }
+
+        foreach (['is_active', 'last_login_at'] as $column) {
+            if (Schema::hasColumn('users', $column)) {
+                Schema::table('users', fn (Blueprint $table) => $table->dropColumn($column));
+            }
+        }
 
         DB::table('users')->where('role', '<>', 'admin')->update(['role' => 'employee']);
 
         Schema::table('users', function (Blueprint $table) {
             $table->set('role', ['employee', 'admin'])->default('employee')->change();
-            $table->string('last_name', 30)->default('')->after('name');
-            $table->string('phone_number', 15)->default('')->after('last_name');
+
+            if (! Schema::hasColumn('users', 'last_name')) {
+                $table->string('last_name', 30)->default('')->after('name');
+            }
+            if (! Schema::hasColumn('users', 'phone_number')) {
+                $table->string('phone_number', 15)->default('')->after('name');
+            }
         });
     }
 };

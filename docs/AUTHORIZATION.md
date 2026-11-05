@@ -116,9 +116,19 @@ department filter).
 ## Accounts
 
 - No public registration and no e-mail password reset: administrators create accounts
-  (`/users`) and reset passwords. Users change their own name and password under *My account*.
+  (`/users`) and reset other users' passwords. Everyone changes their own name and password under
+  *My account* (current password required; 5 attempts per minute) – administrators too, their own
+  password cannot be reset from the Users screen.
+- Passwords: at least 10 characters with letters and numbers (`Password::defaults()` in
+  `AppServiceProvider`; no breached-password lookup, the app may run offline).
 - Administrators cannot delete, deactivate or change the role of their own account, and there is
   always at least one active administrator (`App\Services\UserManagementService`).
 - Changing or resetting a password signs out the user's other sessions and invalidates
-  "remember me" cookies (`auth.session` middleware, new remember token).
-- Login is rate limited: 5 failed attempts per e-mail + IP per minute.
+  "remember me" cookies (`auth.session` middleware, new remember token; see
+  `App\Support\SessionPasswordHash` for the framework detail this relies on).
+- Login is rate limited: 5 failed attempts per e-mail + IP and 20 per IP per minute. An unknown
+  e-mail costs a password hash check like a known one, and "account deactivated" is only reported
+  after a correct password – responses do not reveal which accounts exist. Behind a proxy,
+  configure trusted proxies (README, *Production settings*).
+- Initial accounts: see README, *Default accounts* (the seeder never re-creates deleted accounts).
+- A manager's filter options (departments, job titles) only list their own department's values.
