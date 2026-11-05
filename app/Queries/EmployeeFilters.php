@@ -27,19 +27,20 @@ final class EmployeeFilters
 
     /**
      * Build from loosely typed input (request data or Livewire properties).
-     * Unknown or empty values fall back to "no filter"; sort options are whitelisted.
+     * Unknown, empty or non-scalar values (e.g. `sortBy[]=x` in a request) fall back to
+     * "no filter"; sort options are whitelisted.
      *
      * @param  array<string, mixed>  $input
      */
     public static function fromArray(array $input): self
     {
-        $status = (string) ($input['employmentStatus'] ?? 'all');
-        $gender = (string) ($input['gender'] ?? 'all');
-        $sortBy = (string) ($input['sortBy'] ?? 'emp_no');
-        $direction = strtolower((string) ($input['sortDirection'] ?? 'asc'));
+        $status = self::text($input['employmentStatus'] ?? null, 'all');
+        $gender = self::text($input['gender'] ?? null, 'all');
+        $sortBy = self::text($input['sortBy'] ?? null, 'emp_no');
+        $direction = strtolower(self::text($input['sortDirection'] ?? null, 'asc'));
 
         return new self(
-            search: (string) ($input['search'] ?? ''),
+            search: self::text($input['search'] ?? null, ''),
             employmentStatus: in_array($status, self::STATUSES, true) ? $status : 'all',
             gender: in_array($gender, ['M', 'F'], true) ? $gender : 'all',
             department: self::optionOrAll($input['department'] ?? null),
@@ -81,9 +82,17 @@ final class EmployeeFilters
         return $this->salaryMin !== null || $this->salaryMax !== null;
     }
 
+    /**
+     * Scalar input as a string; anything else (null, arrays, objects) is $default.
+     */
+    private static function text(mixed $value, string $default): string
+    {
+        return is_scalar($value) ? (string) $value : $default;
+    }
+
     private static function optionOrAll(mixed $value): string
     {
-        $value = (string) ($value ?? '');
+        $value = self::text($value, '');
 
         return $value === '' ? 'all' : $value;
     }

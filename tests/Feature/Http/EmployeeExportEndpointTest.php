@@ -7,6 +7,7 @@ use App\Models\Employee;
 use App\Services\EmployeeExportService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\View;
 use Tests\Concerns\ActsAsAdmin;
 use Tests\Concerns\BuildsDirectory;
 use Tests\TestCase;
@@ -144,6 +145,28 @@ class EmployeeExportEndpointTest extends TestCase
         $this->assertSame("Mary, \"Jo\" O'Neil\nJr", $rows[0][3]);
     }
 
+    public function test_csv_neutralizes_spreadsheet_formulas(): void
+    {
+        $dept = Department::factory()->create(['dept_name' => '=HYPERLINK("http://x")']);
+        Employee::factory()->current($dept, '+Title')->create([
+            'emp_no' => 60, 'first_name' => '=1+2', 'last_name' => '@SUM(A1)', 'hire_date' => '1999-01-01',
+        ]);
+        Employee::factory()->current($this->alpha)->create([
+            'emp_no' => 61, 'first_name' => '-2+3', 'last_name' => "\tTab", 'hire_date' => '1999-01-01',
+        ]);
+        Employee::factory()->current($this->alpha)->create([
+            'emp_no' => 62, 'first_name' => "\rCR", 'last_name' => 'Safe=1', 'hire_date' => '1999-01-01',
+        ]);
+
+        [, $rows] = $this->exportCsv(['selectAll' => '0', 'selectedEmployees' => '60,61,62']);
+        $byNo = collect($rows)->keyBy(0);
+
+        $this->assertSame(["'=1+2", "'@SUM(A1)", "'=1+2 @SUM(A1)", '\'=HYPERLINK("http://x")', "'+Title"], array_slice($byNo['60'], 1, 5));
+        $this->assertSame(["'-2+3", "'\tTab", "'-2+3 \tTab"], array_slice($byNo['61'], 1, 3));
+        $this->assertSame(["'\rCR", 'Safe=1', "'\rCR Safe=1"], array_slice($byNo['62'], 1, 3), 'only a leading character triggers the prefix');
+        $this->assertSame('Alpha', $byNo['61'][4], 'ordinary values are left alone');
+    }
+
     public function test_csv_keeps_non_ascii_names_intact(): void
     {
         Employee::factory()->current($this->alpha)->create([
@@ -198,6 +221,24 @@ class EmployeeExportEndpointTest extends TestCase
 
         $response->assertRedirect(); // nothing matches -> back with an error
         $this->assertSame(7, DB::table('employees')->count());
+    }
+
+    public function test_array_valued_filter_and_sort_params_fall_back_to_the_defaults(): void
+    {
+        [, $rows] = $this->exportCsv([
+            'search' => ['Smith'], 'employmentStatus' => ['current'], 'gender' => ['F'], 'department' => [$this->alpha->dept_no],
+            'jobTitle' => ['Engineer'], 'salaryMin' => ['60000'], 'salaryMax' => ['x' => 1], 'sortBy' => ['name'],
+            'sortDirection' => ['desc'], 'format' => ['pdf'],
+        ]);
+
+        $this->assertSame([1, 2, 3, 4, 5, 6, 7], $this->ids($rows), 'no filter, emp_no order, CSV');
+    }
+
+    public function test_array_valued_selection_params_are_ignored(): void
+    {
+        [, $rows] = $this->exportCsv(['selectAll' => ['1'], 'selectedEmployees' => [[1], 2, ['x' => 3]]]);
+
+        $this->assertSame([2], $this->ids($rows), 'selectAll[] is not "on"; nested ids are dropped');
     }
 
     // ------------------------------------------------------ selection modes
@@ -267,6 +308,54 @@ class EmployeeExportEndpointTest extends TestCase
 
         $this->assertSame([2], $this->ids($rows));
         $this->assertSame(7, DB::table('employees')->count());
+    }
+
+    public function test_exclusions_as_one_comma_separated_field_with_more_than_a_thousand_ids(): void
+    {
+        // PHP's max_input_vars (1000) would truncate 1500 separate excludedEmployees[] fields.
+        $excluded = array_merge([2, 5], range(1000, 2499));
+        $this->assertGreaterThan(1000, count($excluded));
+
+        [$response, $rows] = $this->exportCsv(['selectAll' => '1', 'excludedEmployees' => implode(',', $excluded)]);
+
+        $this->assertSame([1, 3, 4, 6, 7], $this->ids($rows));
+        $this->assertStringContainsString('employees_export_selected_5_', $response->headers->get('Content-Disposition'));
+    }
+
+    public function test_exclusion_of_the_last_id_in_a_long_comma_separated_list_is_applied(): void
+    {
+        [, $rows] = $this->exportCsv(['selectAll' => '1', 'excludedEmployees' => implode(',', [...range(100, 1199), 7])]);
+
+        $this->assertSame([1, 2, 3, 4, 5, 6], $this->ids($rows));
+    }
+
+    public function test_selection_as_one_comma_separated_field(): void
+    {
+        [, $rows] = $this->exportCsv(['selectAll' => '0', 'selectedEmployees' => '7, 3,1']);
+        $this->assertSame([1, 3, 7], $this->ids($rows));
+
+        [, $rows] = $this->exportCsv(['selectAll' => '0', 'selectedEmployees' => '2,abc,3; DROP TABLE employees,,-4,2.5,2']);
+        $this->assertSame([2], $this->ids($rows), 'only positive integers are accepted');
+        $this->assertSame(7, DB::table('employees')->count());
+    }
+
+    public function test_empty_comma_separated_fields_mean_no_ids(): void
+    {
+        [, $rows] = $this->exportCsv(['selectAll' => '1', 'excludedEmployees' => '']);
+        $this->assertSame([1, 2, 3, 4, 5, 6, 7], $this->ids($rows));
+
+        $this->from(route('employees.index'))
+            ->post(route('employees.export'), ['format' => 'csv', 'selectAll' => '0', 'selectedEmployees' => ' , '])
+            ->assertRedirect(route('employees.index'))
+            ->assertSessionHas('error', 'No employees were selected for export.');
+    }
+
+    public function test_export_form_sends_the_ids_in_a_single_field(): void
+    {
+        $this->get(route('employees.index'))
+            ->assertOk()
+            ->assertSee("addHiddenInput(form, idsField, (ids || []).join(','))", false)
+            ->assertDontSee('Employees[]', false);
     }
 
     public function test_empty_selection_redirects_back_with_an_error(): void
@@ -348,6 +437,58 @@ class EmployeeExportEndpointTest extends TestCase
     public function test_pdf_export_is_limited_to_the_first_thousand_employees(): void
     {
         $this->assertSame(1000, EmployeeExportService::PDF_LIMIT);
+    }
+
+    /**
+     * Export a PDF with a PDF limit of 3 and return [response, data passed to the PDF view].
+     *
+     * @return array{0: \Illuminate\Testing\TestResponse, 1: array<string, mixed>}
+     */
+    private function exportPdfWithLimitOfThree(array $payload): array
+    {
+        $this->app->instance(EmployeeExportService::class, new class extends EmployeeExportService
+        {
+            public const PDF_LIMIT = 3;
+        });
+
+        $data = [];
+        View::composer('exports.employees-pdf', function ($view) use (&$data) {
+            $data = $view->getData();
+        });
+
+        $response = $this->post(route('employees.export'), $payload + ['format' => 'pdf', 'selectAll' => '1']);
+        $response->assertOk()->assertHeader('Content-Type', 'application/pdf');
+
+        return [$response, $data];
+    }
+
+    public function test_limited_pdf_reports_the_real_selection_total(): void
+    {
+        [$response, $data] = $this->exportPdfWithLimitOfThree(['excludedEmployees' => [2]]);
+
+        $this->assertSame([1, 3, 4], $data['employees']->pluck('emp_no')->map(fn ($n) => (int) $n)->all());
+        $this->assertSame(3, $data['totalCount']);
+        $this->assertSame(6, $data['selectedCount'], 'all 7 employees except one, not the capped row count');
+        $this->assertTrue($data['isLimited']);
+        $this->assertStringContainsString('employees_selected_6_', $response->headers->get('Content-Disposition'));
+    }
+
+    public function test_pdf_with_exactly_the_limit_is_not_marked_as_limited(): void
+    {
+        [$response, $data] = $this->exportPdfWithLimitOfThree(['selectAll' => '0', 'selectedEmployees' => [1, 4, 7]]);
+
+        $this->assertSame(3, $data['totalCount']);
+        $this->assertSame(3, $data['selectedCount']);
+        $this->assertFalse($data['isLimited']);
+        $this->assertStringContainsString('employees_selected_3_', $response->headers->get('Content-Disposition'));
+    }
+
+    public function test_pdf_below_the_limit_is_not_marked_as_limited(): void
+    {
+        [, $data] = $this->exportPdfWithLimitOfThree(['gender' => 'F', 'employmentStatus' => 'former']);
+
+        $this->assertSame(2, $data['selectedCount']);
+        $this->assertFalse($data['isLimited']);
     }
 
     // ------------------------------------------------------ total earnings

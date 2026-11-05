@@ -79,11 +79,14 @@ class EmployeeExportService
         set_time_limit(600);
         ini_set('memory_limit', '2G');
 
-        $ids = $query->ids(self::PDF_LIMIT);
+        $ids = $query->ids(static::PDF_LIMIT);
 
         if ($ids === []) {
             return back()->with('error', __('No employees found for export.'));
         }
+
+        // The PDF holds at most PDF_LIMIT rows; the selection itself may be larger.
+        $selectedCount = count($ids) < static::PDF_LIMIT ? count($ids) : $query->count();
 
         $earnings = $withSalaries ? $this->totalEarnings($ids) : [];
         $employees = $query->rowsFor($ids)->map(fn ($employee) => (object) [
@@ -105,8 +108,9 @@ class EmployeeExportService
                 'employees' => $employees,
                 'exportDate' => now()->format('Y-m-d H:i:s'),
                 'totalCount' => $employees->count(),
-                'selectedCount' => count($ids),
-                'isLimited' => $employees->count() >= self::PDF_LIMIT,
+                'selectedCount' => $selectedCount,
+                'isLimited' => $selectedCount > static::PDF_LIMIT,
+                'limit' => static::PDF_LIMIT,
                 'filters' => $query->filters(),
                 'withSalaries' => $withSalaries,
             ])
@@ -117,7 +121,7 @@ class EmployeeExportService
                     'defaultFont' => 'DejaVu Sans',
                 ]);
 
-            return $pdf->download('employees_selected_'.count($ids).'_'.date('Y-m-d_H-i-s').'.pdf');
+            return $pdf->download('employees_selected_'.$selectedCount.'_'.date('Y-m-d_H-i-s').'.pdf');
         } catch (\Exception $e) {
             // Details go to the log only - the message may contain paths, SQL or data.
             report($e);
@@ -180,7 +184,7 @@ class EmployeeExportService
             $title = $employee->last_job_title.' ('.__('Last').')';
         }
 
-        return [
+        return array_map(self::csvCell(...), [
             $employee->emp_no,
             $employee->first_name,
             $employee->last_name,
@@ -192,6 +196,20 @@ class EmployeeExportService
             date('Y-m-d', strtotime($employee->hire_date)),
             $employee->gender === 'M' ? __('Male') : __('Female'),
             $employee->current_dept_name ? __('Active') : __('Former'),
-        ];
+        ]);
+    }
+
+    /**
+     * Neutralize spreadsheet formulas (CSV injection): a text cell starting with =, +, -, @,
+     * a tab or a carriage return is prefixed with a single quote so that Excel / LibreOffice
+     * show it as text instead of evaluating it.
+     */
+    private static function csvCell(mixed $value): mixed
+    {
+        if (is_string($value) && $value !== '' && in_array($value[0], ['=', '+', '-', '@', "\t", "\r"], true)) {
+            return "'".$value;
+        }
+
+        return $value;
     }
 }

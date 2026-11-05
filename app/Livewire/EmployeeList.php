@@ -45,6 +45,12 @@ class EmployeeList extends Component
      * Number of employees matching the filters, kept between requests so that
      * sorting, paging and (de)selecting do not re-count. Recomputed whenever the
      * filters change ($totalKey is a fingerprint of the filters it belongs to).
+     *
+     * Known trade-off: while the page stays open the total is not refreshed, so
+     * employees added or removed in the meantime are not reflected in the
+     * "found" / "selected" counts (and the last page) until the filters change
+     * or the page is reloaded. The export itself always re-runs the query, so
+     * it is never affected - only the displayed numbers can be stale.
      */
     #[Locked]
     public ?int $totalEmployees = null;
@@ -61,15 +67,26 @@ class EmployeeList extends Component
         $this->excludedEmployees = [];
     }
 
+    /**
+     * Apply the filters sent by the filter component. The payload comes from the
+     * client, so anything that is not an array is ignored and every value is
+     * normalized by EmployeeFilters (missing, invalid or non-scalar -> no filter).
+     */
     public function updateFilters($filters)
     {
-        $this->search = $filters['search'] ?? '';
-        $this->employmentStatus = $filters['employmentStatus'] ?? 'all';
-        $this->gender = $filters['gender'] ?? 'all';
-        $this->department = $filters['department'] ?? 'all';
-        $this->salaryMin = $filters['salaryMin'] ?? '';
-        $this->salaryMax = $filters['salaryMax'] ?? '';
-        $this->jobTitleFilter = $filters['jobTitle'] ?? 'all';
+        if (! is_array($filters)) {
+            return;
+        }
+
+        $sanitized = EmployeeFilters::fromArray($filters);
+
+        $this->search = $sanitized->search;
+        $this->employmentStatus = $sanitized->employmentStatus;
+        $this->gender = $sanitized->gender;
+        $this->department = $sanitized->department;
+        $this->salaryMin = $sanitized->salaryMin === null ? '' : (string) $sanitized->salaryMin;
+        $this->salaryMax = $sanitized->salaryMax === null ? '' : (string) $sanitized->salaryMax;
+        $this->jobTitleFilter = $sanitized->jobTitle;
 
         $this->resetPage();
         $this->resetSelection();

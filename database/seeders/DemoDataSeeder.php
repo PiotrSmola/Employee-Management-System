@@ -45,6 +45,10 @@ class DemoDataSeeder extends Seeder
 
     public function run(int $employees = 200): void
     {
+        // Faker draws from PHP's global mt_rand state, and Faker\Generator::__destruct()
+        // reseeds it randomly. Collect pending garbage first (e.g. generators of earlier
+        // application instances in a test run) so that no destructor reseeds mid-run.
+        gc_collect_cycles();
         fake()->seed(20021);
 
         DB::transaction(function () use ($employees) {
@@ -74,7 +78,10 @@ class DemoDataSeeder extends Seeder
                     'department' => $departments[$deptNo],
                     'title' => $promoted ? $senior : $junior,
                     'salary' => fake()->numberBetween(40000, $promoted ? 110000 : 80000),
-                    'previousDepartment' => $transferred ? $departments->except($deptNo)->random() : null,
+                    // Picked with the seeded faker (Collection::random() is not reproducible).
+                    'previousDepartment' => $transferred
+                        ? $departments[fake()->randomElement(array_values(array_diff(array_keys(self::DEPARTMENTS), [$deptNo])))]
+                        : null,
                     'previousTitle' => $promoted ? $junior : null,
                 ];
 

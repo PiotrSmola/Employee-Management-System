@@ -28,7 +28,7 @@ A comprehensive web-based employee management platform built with Laravel 11, de
 
 - **Framework**: Laravel 11.x
 - **PHP**: 8.2+
-- **Database**: MySQL/PostgreSQL compatible
+- **Database**: MySQL 8.0+ (the directory queries use MySQL optimizer hints and the index migration builds indexes online with `ALGORITHM=INPLACE`; other databases are not supported)
 - **Frontend**: Bootstrap 5, Blade templating
 - **PDF Generation**: Laravel DomPDF
 - **Interactive Components**: Livewire 3.5
@@ -40,7 +40,7 @@ A comprehensive web-based employee management platform built with Laravel 11, de
 - PHP 8.2 or higher
 - Composer
 - Node.js & NPM (for asset compilation)
-- MySQL 8.0+ or PostgreSQL 13+
+- MySQL 8.0+
 - Web server (Apache/Nginx)
 
 ## Quick Start with Docker (recommended)
@@ -192,7 +192,7 @@ Configure your database connection in the `.env` file:
 DB_CONNECTION=mysql
 DB_HOST=127.0.0.1
 DB_PORT=3306
-DB_DATABASE=employee_management
+DB_DATABASE=employees_management
 DB_USERNAME=your_username
 DB_PASSWORD=your_password
 ```
@@ -303,7 +303,8 @@ department on a cache miss and is cached for 15 minutes per department.
 
 The suite uses MySQL and a dedicated database (`testing` by default, see `phpunit.xml`
 and `.env.testing`). It is wiped on every run (`RefreshDatabase`); `tests/TestCase.php`
-refuses to run against `employees_management`. Tests build their data with factories
+refuses to run unless the database is `testing` or its name ends in `_test` / `_testing`
+(and refuses a `DB_URL`). Tests build their data with factories
 and never depend on the imported dataset. Feature tests that open pages or Livewire components
 use `tests/Concerns/ActsAsAdmin.php` (signed in as an active administrator; `signInAs(Role::Viewer)`
 etc. switches the role); the authorization rules are covered in `tests/Feature/Auth`.
