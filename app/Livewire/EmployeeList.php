@@ -42,6 +42,12 @@ class EmployeeList extends Component
      * Number of employees matching the filters, kept between requests so that
      * sorting, paging and (de)selecting do not re-count. Recomputed whenever the
      * filters change ($totalKey is a fingerprint of the filters it belongs to).
+     *
+     * Known trade-off: while the page stays open the total is not refreshed, so
+     * employees added or removed in the meantime are not reflected in the
+     * "found" / "selected" counts (and the last page) until the filters change
+     * or the page is reloaded. The export itself always re-runs the query, so
+     * it is never affected - only the displayed numbers can be stale.
      */
     #[Locked]
     public ?int $totalEmployees = null;
