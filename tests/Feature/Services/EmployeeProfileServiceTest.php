@@ -69,7 +69,7 @@ class EmployeeProfileServiceTest extends TestCase
         $profile = $this->service->build(100);
 
         $this->assertSame(
-            ['employee', 'departmentHistory', 'titleHistory', 'salaryHistory', 'combinedHistory', 'stats', 'salaryChartData'],
+            ['employee', 'departmentHistory', 'titleHistory', 'salaryHistory', 'combinedHistory', 'stats', 'salaryChartData', 'canSeeSalaries'],
             array_keys($profile)
         );
         $employee = $profile['employee'];

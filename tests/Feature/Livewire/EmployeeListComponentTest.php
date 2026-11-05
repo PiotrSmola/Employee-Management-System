@@ -7,11 +7,13 @@ use App\Models\Employee;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException;
 use Livewire\Livewire;
+use Tests\Concerns\ActsAsAdmin;
 use Tests\Concerns\BuildsDirectory;
 use Tests\TestCase;
 
 class EmployeeListComponentTest extends TestCase
 {
+    use ActsAsAdmin;
     use BuildsDirectory;
     use RefreshDatabase;
 

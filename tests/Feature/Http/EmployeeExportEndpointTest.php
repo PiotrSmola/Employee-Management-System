@@ -7,11 +7,13 @@ use App\Models\Employee;
 use App\Services\EmployeeExportService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Tests\Concerns\ActsAsAdmin;
 use Tests\Concerns\BuildsDirectory;
 use Tests\TestCase;
 
 class EmployeeExportEndpointTest extends TestCase
 {
+    use ActsAsAdmin;
     use BuildsDirectory;
     use RefreshDatabase;
 

@@ -7,10 +7,12 @@ use App\Models\Department;
 use App\Models\Employee;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
+use Tests\Concerns\ActsAsAdmin;
 use Tests\TestCase;
 
 class EmployeeListTest extends TestCase
 {
+    use ActsAsAdmin;
     use RefreshDatabase;
 
     public function test_employee_index_page_renders_the_livewire_components(): void

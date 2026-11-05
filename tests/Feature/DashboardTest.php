@@ -5,10 +5,12 @@ namespace Tests\Feature;
 use App\Models\Department;
 use App\Models\Employee;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\ActsAsAdmin;
 use Tests\TestCase;
 
 class DashboardTest extends TestCase
 {
+    use ActsAsAdmin;
     use RefreshDatabase;
 
     public function test_dashboard_shows_statistics_and_recent_hires(): void

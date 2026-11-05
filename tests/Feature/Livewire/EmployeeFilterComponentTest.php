@@ -7,11 +7,13 @@ use App\Livewire\EmployeeList;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\ActsAsAdmin;
 use Tests\Concerns\BuildsDirectory;
 use Tests\TestCase;
 
 class EmployeeFilterComponentTest extends TestCase
 {
+    use ActsAsAdmin;
     use BuildsDirectory;
     use RefreshDatabase;
 

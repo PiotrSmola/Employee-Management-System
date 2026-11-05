@@ -192,8 +192,9 @@ class EmployeeList extends Component
             'gender' => $filters->gender,
             'department' => $filters->department,
             'jobTitle' => $filters->jobTitle,
-            'salaryMin' => $filters->salaryMin ?? '',
-            'salaryMax' => $filters->salaryMax ?? '',
+            // As entered, unless the bound is not applied (no view-salaries).
+            'salaryMin' => $filters->salaryMin === null ? '' : $this->salaryMin,
+            'salaryMax' => $filters->salaryMax === null ? '' : $this->salaryMax,
             'sortBy' => $filters->sortBy,
             'sortDirection' => $filters->sortDirection,
             'selectAll' => (bool) $this->selectAll,

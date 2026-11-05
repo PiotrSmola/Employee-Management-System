@@ -5,10 +5,12 @@ namespace Tests\Feature;
 use App\Models\Department;
 use App\Models\Employee;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\ActsAsAdmin;
 use Tests\TestCase;
 
 class EmployeeExportTest extends TestCase
 {
+    use ActsAsAdmin;
     use RefreshDatabase;
 
     public function test_csv_export_of_all_filtered_employees_except_excluded(): void

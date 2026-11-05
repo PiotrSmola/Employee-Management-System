@@ -5,10 +5,12 @@ namespace Tests\Feature;
 use App\Models\Department;
 use App\Models\Employee;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\ActsAsAdmin;
 use Tests\TestCase;
 
 class EmployeeProfileTest extends TestCase
 {
+    use ActsAsAdmin;
     use RefreshDatabase;
 
     public function test_profile_shows_current_employment_and_history(): void
