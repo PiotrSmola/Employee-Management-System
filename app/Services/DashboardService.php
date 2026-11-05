@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Department;
 use App\Models\Employee;
+use App\Support\EmployeeDataCache;
 use App\Support\EmployeeVisibility;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -41,13 +42,13 @@ class DashboardService
             return $this->forDepartment($visibility);
         }
 
-        $stats = Cache::remember('dashboard_stats', self::STATS_TTL, fn () => [
+        $stats = Cache::remember(EmployeeDataCache::DASHBOARD_STATS, self::STATS_TTL, fn () => [
             'totalEmployees' => Employee::count(),
             'totalDepartments' => Department::count(),
             'averageSalary' => DB::table('salaries')->where('to_date', self::CURRENT)->avg('salary'),
         ]);
 
-        $employeesByDepartment = Cache::remember('employees_by_department', self::BREAKDOWN_TTL, fn () => DB::table('dept_emp')
+        $employeesByDepartment = Cache::remember(EmployeeDataCache::EMPLOYEES_BY_DEPARTMENT, self::BREAKDOWN_TTL, fn () => DB::table('dept_emp')
             ->join('departments', 'dept_emp.dept_no', '=', 'departments.dept_no')
             ->where('dept_emp.to_date', self::CURRENT)
             ->select('departments.dept_name', DB::raw('count(*) as total'))
@@ -96,14 +97,14 @@ class DashboardService
             ->where('de.dept_no', $department->dept_no)
             ->where('de.to_date', self::CURRENT);
 
-        $stats = Cache::remember('dashboard_stats:dept:'.$department->dept_no, self::STATS_TTL, fn () => [
+        $stats = Cache::remember(EmployeeDataCache::departmentStats($department->dept_no), self::STATS_TTL, fn () => [
             'totalEmployees' => $current()->count(),
             'averageSalary' => $current()
                 ->join('salaries as s', fn ($join) => $join->on('s.emp_no', '=', 'de.emp_no')->where('s.to_date', '=', self::CURRENT))
                 ->avg('s.salary'),
         ]);
 
-        $employeesByTitle = Cache::remember('employees_by_title:dept:'.$department->dept_no, self::BREAKDOWN_TTL, fn () => $current()
+        $employeesByTitle = Cache::remember(EmployeeDataCache::departmentTitleBreakdown($department->dept_no), self::BREAKDOWN_TTL, fn () => $current()
             ->join('titles as t', fn ($join) => $join->on('t.emp_no', '=', 'de.emp_no')->where('t.to_date', '=', self::CURRENT))
             ->select('t.title', DB::raw('count(*) as total'))
             ->groupBy('t.title')

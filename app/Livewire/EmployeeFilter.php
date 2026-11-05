@@ -3,6 +3,7 @@
 namespace App\Livewire;
 
 use App\Models\Department;
+use App\Support\EmployeeDataCache;
 use App\Support\EmployeeVisibility;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -143,7 +144,7 @@ class EmployeeFilter extends Component
             return DB::table('titles')->select('title')->distinct()->orderBy('title')->get();
         }
 
-        $key = 'job_titles:dept:'.($visibility->department() ?? EmployeeVisibility::NO_DEPARTMENT);
+        $key = EmployeeDataCache::departmentJobTitles($visibility->department() ?? EmployeeVisibility::NO_DEPARTMENT);
 
         return Cache::remember($key, self::DEPARTMENT_TITLES_TTL, fn () => $visibility
             ->constrain(DB::table('titles as t'), 't.emp_no')
