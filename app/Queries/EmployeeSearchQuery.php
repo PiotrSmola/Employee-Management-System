@@ -191,7 +191,7 @@ class EmployeeSearchQuery
             $query = $segment();
 
             if ($limit === null) {
-                array_push($ids, ...self::pluckIds($query));
+                self::append($ids, self::pluckIds($query));
 
                 continue;
             }
@@ -199,7 +199,7 @@ class EmployeeSearchQuery
             $needed = $limit - count($ids);
 
             if ($i === $last) {
-                array_push($ids, ...self::pluckIds($query->limit($needed)->offset($offset)));
+                self::append($ids, self::pluckIds($query->limit($needed)->offset($offset)));
                 break;
             }
 
@@ -208,7 +208,7 @@ class EmployeeSearchQuery
             $chunk = self::pluckIds($query->limit($offset + $needed));
 
             if (count($chunk) > $offset) {
-                array_push($ids, ...array_slice($chunk, $offset));
+                self::append($ids, array_slice($chunk, $offset));
                 $offset = 0;
             } else {
                 $offset -= count($chunk);
@@ -522,6 +522,20 @@ class EmployeeSearchQuery
         $hint = ($perRow ?? $this->perRowSubqueries) ? '/*+ NO_SEMIJOIN() */ ' : '';
 
         return $query->selectRaw($hint.($column === null ? '1' : $query->getGrammar()->wrap($column)));
+    }
+
+    /**
+     * Append $more to $ids. A plain loop instead of array_push($ids, ...$more): spreading
+     * a 300k-element array passes every element as a separate function argument.
+     *
+     * @param  int[]  $ids
+     * @param  int[]  $more
+     */
+    private static function append(array &$ids, array $more): void
+    {
+        foreach ($more as $id) {
+            $ids[] = $id;
+        }
     }
 
     /**
