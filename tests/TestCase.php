@@ -7,8 +7,11 @@ use RuntimeException;
 
 abstract class TestCase extends BaseTestCase
 {
-    /** Databases the test suite must never touch (RefreshDatabase wipes them). */
-    private const PROTECTED_DATABASES = ['employees_management'];
+    /**
+     * Names of databases the suite may run against (RefreshDatabase wipes them):
+     * "testing", or anything ending in "_test" / "_testing" (e.g. ems_<workspace>_test).
+     */
+    private const TEST_DATABASE_PATTERN = '/(^|_)test(ing)?$/';
 
     public function createApplication()
     {
@@ -20,16 +23,34 @@ abstract class TestCase extends BaseTestCase
         $app['config']->set('cache.default', 'array');
         $app['config']->set('session.driver', 'array');
 
-        $connection = $app['config']->get('database.default');
-        $database = (string) $app['config']->get("database.connections.{$connection}.database");
+        self::guardTestDatabase($app['config']->get('database.default'), $app['config']->get('database.connections'));
 
-        if (in_array(strtolower($database), self::PROTECTED_DATABASES, true)) {
+        return $app;
+    }
+
+    /**
+     * Refuse to run unless the default connection clearly points at a dedicated test database.
+     * A connection URL is refused as well: it would override the database name checked here.
+     *
+     * @param  array<string, array<string, mixed>>|null  $connections
+     */
+    private static function guardTestDatabase(?string $connection, ?array $connections): void
+    {
+        $config = $connections[$connection] ?? [];
+        $database = (string) ($config['database'] ?? '');
+
+        if ((string) ($config['url'] ?? '') !== '') {
             throw new RuntimeException(sprintf(
-                'Refusing to run tests against the "%s" database. Point DB_DATABASE at a dedicated test database.',
-                $database
+                'Refusing to run tests: the "%s" connection is configured with a URL (DB_URL). Unset it and point DB_DATABASE at a dedicated test database.',
+                $connection
             ));
         }
 
-        return $app;
+        if (! preg_match(self::TEST_DATABASE_PATTERN, strtolower($database))) {
+            throw new RuntimeException(sprintf(
+                'Refusing to run tests against the "%s" database. Point DB_DATABASE at a dedicated test database ("testing" or a name ending in "_test").',
+                $database
+            ));
+        }
     }
 }
