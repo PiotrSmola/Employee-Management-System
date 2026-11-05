@@ -26,6 +26,11 @@ class LoginController extends Controller
 
         $request->session()->regenerate();
 
+        // The auth.session middleware compares this hash on every request; a value
+        // left in the session by a previous (e.g. since deleted) account would sign
+        // the new user out immediately.
+        $request->session()->put('password_hash_'.Auth::getDefaultDriver(), $user->getAuthPassword());
+
         // Not a profile change - keep updated_at as it is.
         $user->timestamps = false;
         $user->forceFill(['last_login_at' => now()])->save();

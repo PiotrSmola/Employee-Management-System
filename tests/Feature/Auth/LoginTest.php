@@ -50,6 +50,18 @@ class LoginTest extends TestCase
         $this->assertNotNull($user->fresh()->last_login_at);
     }
 
+    public function test_sign_in_works_in_a_session_left_over_from_another_account(): void
+    {
+        User::factory()->create(['email' => 'jane@example.com']);
+
+        $this->withSession(['password_hash_web' => 'hash-of-a-deleted-account'])
+            ->post(route('login.store'), ['email' => 'jane@example.com', 'password' => 'password'])
+            ->assertRedirect(route('index'));
+
+        $this->get(route('index'))->assertOk();
+        $this->assertAuthenticated();
+    }
+
     public function test_sign_in_redirects_to_the_page_that_was_requested(): void
     {
         User::factory()->create(['email' => 'jane@example.com']);
