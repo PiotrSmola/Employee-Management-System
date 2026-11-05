@@ -117,15 +117,17 @@ return [
     | Initial Accounts (Database\Seeders\UserSeeder)
     |--------------------------------------------------------------------------
     |
-    | The administrator account created when it does not exist yet, and whether
-    | the hr@ / manager@ / viewer@example.com demo accounts are created too.
+    | The administrator created while no administrator account exists, and
+    | whether the hr@ / manager@ / viewer@example.com demo accounts are created
+    | on a fresh local installation. Without ADMIN_PASSWORD the administrator
+    | gets "password" locally and a random, printed-once password elsewhere.
     | Existing accounts are never modified by the seeder.
     |
     */
 
     'initial_admin' => [
         'email' => env('ADMIN_EMAIL', 'admin@example.com'),
-        'password' => env('ADMIN_PASSWORD', 'password'),
+        'password' => env('ADMIN_PASSWORD'),
         'name' => env('ADMIN_NAME', 'Administrator'),
     ],
 
