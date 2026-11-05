@@ -12,7 +12,7 @@ contract for code that adds routes, screens, reports or APIs.
 | Gate registration, policies | `App\Providers\AuthorizationServiceProvider` |
 | Which employees / columns a user may see | `App\Support\EmployeeVisibility` |
 | Single employee | `App\Policies\EmployeePolicy` (`view` uses the visibility) |
-| Signed-in + active check | `auth`, `auth.session`, `active` middleware (`routes/web.php`; Livewire updates in `AppServiceProvider`) |
+| Signed-in + active check | `auth`, `auth.session`, `active` middleware (`routes/web.php`, which loads `routes/web/*.php` inside the group; Livewire updates in `AppServiceProvider`) |
 
 Inactive accounts (`users.is_active = false`) cannot sign in, are signed out on their next
 request and have no ability at all.
@@ -45,7 +45,8 @@ salary rules. Viewers therefore have no bulk export, but can print a profile wit
 
 Rules for new code:
 
-- Every new route goes inside the authenticated group in `routes/web.php`.
+- Every new route goes inside the authenticated group: in a `routes/web/<feature>.php` file,
+  which `routes/web.php` loads inside that group (see [EXTENDING.md](EXTENDING.md)).
 - Every mutating action (controller method **and** Livewire action) checks its Gate/policy on
   the server. Hiding a button is not enough. Livewire components can be called directly.
 - New abilities are added to `Ability::MATRIX` (and to the table above and
