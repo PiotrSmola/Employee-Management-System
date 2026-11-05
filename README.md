@@ -27,7 +27,7 @@ A comprehensive web-based employee management platform built with Laravel 11, de
 
 - **Framework**: Laravel 11.x
 - **PHP**: 8.2+
-- **Database**: MySQL/PostgreSQL compatible
+- **Database**: MySQL 8.0+ (the directory queries use MySQL optimizer hints and the index migration builds indexes online with `ALGORITHM=INPLACE`; other databases are not supported)
 - **Frontend**: Bootstrap 5, Blade templating
 - **PDF Generation**: Laravel DomPDF
 - **Interactive Components**: Livewire 3.5
@@ -39,7 +39,7 @@ A comprehensive web-based employee management platform built with Laravel 11, de
 - PHP 8.2 or higher
 - Composer
 - Node.js & NPM (for asset compilation)
-- MySQL 8.0+ or PostgreSQL 13+
+- MySQL 8.0+
 - Web server (Apache/Nginx)
 
 ## Quick Start with Docker (recommended)
@@ -126,7 +126,7 @@ Configure your database connection in the `.env` file:
 DB_CONNECTION=mysql
 DB_HOST=127.0.0.1
 DB_PORT=3306
-DB_DATABASE=employee_management
+DB_DATABASE=employees_management
 DB_USERNAME=your_username
 DB_PASSWORD=your_password
 ```
@@ -229,7 +229,8 @@ single filters and sorts 0.1–0.6 s, combined filters up to ~2 s, full CSV expo
 
 The suite uses MySQL and a dedicated database (`testing` by default, see `phpunit.xml`
 and `.env.testing`). It is wiped on every run (`RefreshDatabase`); `tests/TestCase.php`
-refuses to run against `employees_management`. Tests build their data with factories
+refuses to run unless the database is `testing` or its name ends in `_test` / `_testing`
+(and refuses a `DB_URL`). Tests build their data with factories
 and never depend on the imported dataset.
 
 Tests need the Composer **dev** dependencies (PHPUnit, Faker, …). The Docker app image is
