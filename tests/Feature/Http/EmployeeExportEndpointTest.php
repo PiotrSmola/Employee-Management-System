@@ -143,6 +143,28 @@ class EmployeeExportEndpointTest extends TestCase
         $this->assertSame("Mary, \"Jo\" O'Neil\nJr", $rows[0][3]);
     }
 
+    public function test_csv_neutralizes_spreadsheet_formulas(): void
+    {
+        $dept = Department::factory()->create(['dept_name' => '=HYPERLINK("http://x")']);
+        Employee::factory()->current($dept, '+Title')->create([
+            'emp_no' => 60, 'first_name' => '=1+2', 'last_name' => '@SUM(A1)', 'hire_date' => '1999-01-01',
+        ]);
+        Employee::factory()->current($this->alpha)->create([
+            'emp_no' => 61, 'first_name' => '-2+3', 'last_name' => "\tTab", 'hire_date' => '1999-01-01',
+        ]);
+        Employee::factory()->current($this->alpha)->create([
+            'emp_no' => 62, 'first_name' => "\rCR", 'last_name' => 'Safe=1', 'hire_date' => '1999-01-01',
+        ]);
+
+        [, $rows] = $this->exportCsv(['selectAll' => '0', 'selectedEmployees' => '60,61,62']);
+        $byNo = collect($rows)->keyBy(0);
+
+        $this->assertSame(["'=1+2", "'@SUM(A1)", "'=1+2 @SUM(A1)", '\'=HYPERLINK("http://x")', "'+Title"], array_slice($byNo['60'], 1, 5));
+        $this->assertSame(["'-2+3", "'\tTab", "'-2+3 \tTab"], array_slice($byNo['61'], 1, 3));
+        $this->assertSame(["'\rCR", 'Safe=1', "'\rCR Safe=1"], array_slice($byNo['62'], 1, 3), 'only a leading character triggers the prefix');
+        $this->assertSame('Alpha', $byNo['61'][4], 'ordinary values are left alone');
+    }
+
     public function test_csv_keeps_non_ascii_names_intact(): void
     {
         Employee::factory()->current($this->alpha)->create([

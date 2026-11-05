@@ -162,7 +162,7 @@ class EmployeeExportService
             $title = $employee->last_job_title.' ('.__('Last').')';
         }
 
-        return [
+        return array_map(self::csvCell(...), [
             $employee->emp_no,
             $employee->first_name,
             $employee->last_name,
@@ -174,6 +174,20 @@ class EmployeeExportService
             date('Y-m-d', strtotime($employee->hire_date)),
             $employee->gender === 'M' ? __('Male') : __('Female'),
             $employee->current_dept_name ? __('Active') : __('Former'),
-        ];
+        ]);
+    }
+
+    /**
+     * Neutralize spreadsheet formulas (CSV injection): a text cell starting with =, +, -, @,
+     * a tab or a carriage return is prefixed with a single quote so that Excel / LibreOffice
+     * show it as text instead of evaluating it.
+     */
+    private static function csvCell(mixed $value): mixed
+    {
+        if (is_string($value) && $value !== '' && in_array($value[0], ['=', '+', '-', '@', "\t", "\r"], true)) {
+            return "'".$value;
+        }
+
+        return $value;
     }
 }
