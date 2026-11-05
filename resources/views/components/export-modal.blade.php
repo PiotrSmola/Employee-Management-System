@@ -199,10 +199,12 @@
                 addHiddenInput(form, 'selectAll', payload.selectAll ? '1' : '0');
 
                 // The selection is sent as "all matching except ..." or "only these",
-                // never as the full list of ids.
+                // never as the full list of ids. The ids go into ONE comma-separated field:
+                // PHP silently drops request fields beyond max_input_vars (1000 by default),
+                // so one input per id would lose ids and export deselected employees.
                 const ids = payload.selectAll ? payload.excludedEmployees : payload.selectedEmployees;
-                const idsField = payload.selectAll ? 'excludedEmployees[]' : 'selectedEmployees[]';
-                (ids || []).forEach(empNo => addHiddenInput(form, idsField, empNo));
+                const idsField = payload.selectAll ? 'excludedEmployees' : 'selectedEmployees';
+                addHiddenInput(form, idsField, (ids || []).join(','));
 
                 ['search', 'employmentStatus', 'gender', 'department', 'jobTitle', 'salaryMin', 'salaryMax',
                     'sortBy', 'sortDirection'

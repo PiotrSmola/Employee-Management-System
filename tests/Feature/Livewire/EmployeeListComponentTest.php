@@ -562,7 +562,10 @@ class EmployeeListComponentTest extends TestCase
             ->call('toggleEmployee', 2);
 
         $payload = $component->instance()->getExportPayload();
+        // Encoded the way the export form does: one comma-separated field per id list.
         $payload['selectAll'] = $payload['selectAll'] ? '1' : '0';
+        $payload['excludedEmployees'] = implode(',', $payload['excludedEmployees']);
+        $payload['selectedEmployees'] = implode(',', $payload['selectedEmployees']);
         $payload['format'] = 'csv';
 
         $content = $this->post(route('employees.export'), $payload)->assertOk()->streamedContent();

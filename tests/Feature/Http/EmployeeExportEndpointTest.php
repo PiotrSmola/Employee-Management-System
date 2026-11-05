@@ -286,6 +286,54 @@ class EmployeeExportEndpointTest extends TestCase
         $this->assertSame(7, DB::table('employees')->count());
     }
 
+    public function test_exclusions_as_one_comma_separated_field_with_more_than_a_thousand_ids(): void
+    {
+        // PHP's max_input_vars (1000) would truncate 1500 separate excludedEmployees[] fields.
+        $excluded = array_merge([2, 5], range(1000, 2499));
+        $this->assertGreaterThan(1000, count($excluded));
+
+        [$response, $rows] = $this->exportCsv(['selectAll' => '1', 'excludedEmployees' => implode(',', $excluded)]);
+
+        $this->assertSame([1, 3, 4, 6, 7], $this->ids($rows));
+        $this->assertStringContainsString('employees_export_selected_5_', $response->headers->get('Content-Disposition'));
+    }
+
+    public function test_exclusion_of_the_last_id_in_a_long_comma_separated_list_is_applied(): void
+    {
+        [, $rows] = $this->exportCsv(['selectAll' => '1', 'excludedEmployees' => implode(',', [...range(100, 1199), 7])]);
+
+        $this->assertSame([1, 2, 3, 4, 5, 6], $this->ids($rows));
+    }
+
+    public function test_selection_as_one_comma_separated_field(): void
+    {
+        [, $rows] = $this->exportCsv(['selectAll' => '0', 'selectedEmployees' => '7, 3,1']);
+        $this->assertSame([1, 3, 7], $this->ids($rows));
+
+        [, $rows] = $this->exportCsv(['selectAll' => '0', 'selectedEmployees' => '2,abc,3; DROP TABLE employees,,-4,2.5,2']);
+        $this->assertSame([2], $this->ids($rows), 'only positive integers are accepted');
+        $this->assertSame(7, DB::table('employees')->count());
+    }
+
+    public function test_empty_comma_separated_fields_mean_no_ids(): void
+    {
+        [, $rows] = $this->exportCsv(['selectAll' => '1', 'excludedEmployees' => '']);
+        $this->assertSame([1, 2, 3, 4, 5, 6, 7], $this->ids($rows));
+
+        $this->from(route('employees.index'))
+            ->post(route('employees.export'), ['format' => 'csv', 'selectAll' => '0', 'selectedEmployees' => ' , '])
+            ->assertRedirect(route('employees.index'))
+            ->assertSessionHas('error', 'No employees were selected for export.');
+    }
+
+    public function test_export_form_sends_the_ids_in_a_single_field(): void
+    {
+        $this->get(route('employees.index'))
+            ->assertOk()
+            ->assertSee("addHiddenInput(form, idsField, (ids || []).join(','))", false)
+            ->assertDontSee('Employees[]', false);
+    }
+
     public function test_empty_selection_redirects_back_with_an_error(): void
     {
         $this->from(route('employees.index'))

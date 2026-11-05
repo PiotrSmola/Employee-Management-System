@@ -21,9 +21,9 @@ class ExportController extends Controller
 
         // Selection is either "everything matching the filters except ..." or "only these".
         if ($request->boolean('selectAll')) {
-            $query = $query->exceptIds((array) $request->input('excludedEmployees', []));
+            $query = $query->exceptIds($this->idList($request, 'excludedEmployees'));
         } else {
-            $selected = (array) $request->input('selectedEmployees', []);
+            $selected = $this->idList($request, 'selectedEmployees');
 
             if ($selected === []) {
                 return back()->with('error', __('No employees were selected for export.'));
@@ -35,5 +35,30 @@ class ExportController extends Controller
         return $request->input('format') === 'pdf'
             ? $this->exports->pdf($query)
             : $this->exports->csv($query);
+    }
+
+    /**
+     * Employee numbers sent as one comma-separated field ("1,2,3"; the export form
+     * does this because PHP drops request fields beyond max_input_vars, so thousands
+     * of `ids[]` inputs would silently lose ids) or, for older clients, as an array.
+     * Anything that is not a positive integer is ignored.
+     *
+     * @return int[]
+     */
+    private function idList(Request $request, string $key): array
+    {
+        $value = $request->input($key, []);
+        $values = is_string($value) ? explode(',', $value) : (array) $value;
+
+        $ids = [];
+        foreach ($values as $id) {
+            $id = is_string($id) || is_int($id) ? trim((string) $id) : '';
+
+            if (ctype_digit($id) && (int) $id > 0) {
+                $ids[] = (int) $id;
+            }
+        }
+
+        return array_values(array_unique($ids));
     }
 }
