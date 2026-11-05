@@ -116,7 +116,36 @@ class EmployeeSearchQuery
             return $f->employmentStatus === 'current' ? $current : DB::table('employees')->count() - $current;
         }
 
+        $onlyDepartment = $f->filtersByDepartment() && ! $f->hasSearch() && $f->gender === 'all'
+            && ! $f->filtersByTitle() && ! $f->filtersBySalary()
+            && $this->onlyIds === null && $this->exceptIds === [];
+
+        if ($onlyDepartment) {
+            return $this->departmentCount($f->department, $f->employmentStatus);
+        }
+
         return $this->filtered()->count();
+    }
+
+    /**
+     * Members of $deptNo counted on dept_emp alone (the department filter alone,
+     * e.g. a manager's unfiltered list). Exact: a current member has exactly one
+     * row in the department (primary key emp_no + dept_no), a former member exactly
+     * one "last" row, and the two groups are disjoint. The "is there a later row"
+     * check is a primary-key lookup per row, which beats the semi-join plan here.
+     */
+    private function departmentCount(string $deptNo, string $status): int
+    {
+        $current = $status === 'former' ? 0 : DB::table('dept_emp')
+            ->where('dept_no', $deptNo)
+            ->where('to_date', self::CURRENT)
+            ->count();
+
+        $former = $status === 'current' ? 0 : self::departmentMembership(
+            DB::table('dept_emp as de_f'), $deptNo, 'former', perRowLastCheck: true
+        )->count();
+
+        return $current + $former;
     }
 
     /**
@@ -478,13 +507,13 @@ class EmployeeSearchQuery
      * This is the definition of "employee of a department" used by the
      * department filter and by the manager scope ({@see \App\Support\EmployeeVisibility}).
      */
-    public static function departmentMembership(Builder $deptEmp, string $deptNo, string $status = 'all'): Builder
+    public static function departmentMembership(Builder $deptEmp, string $deptNo, string $status = 'all', bool $perRowLastCheck = false): Builder
     {
         $deptEmp->where('de_f.dept_no', $deptNo);
 
-        $isLast = function ($w) {
+        $isLast = function ($w) use ($perRowLastCheck) {
             $w->where('de_f.to_date', '<>', self::CURRENT)
-                ->whereNotExists(fn ($later) => $later->select(DB::raw(1))
+                ->whereNotExists(fn ($later) => $later->select(DB::raw($perRowLastCheck ? '/*+ NO_SEMIJOIN() */ 1' : '1'))
                     ->from('dept_emp as de_l')
                     ->whereColumn('de_l.emp_no', 'de_f.emp_no')
                     ->where(fn ($o) => $o->whereColumn('de_l.to_date', '>', 'de_f.to_date')
