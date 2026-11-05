@@ -4,11 +4,15 @@ namespace App\Livewire;
 
 use App\Models\Department;
 use App\Support\EmployeeVisibility;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Livewire\Component;
 
 class EmployeeFilter extends Component
 {
+    private const DEPARTMENT_TITLES_TTL = 1800;
+
     public $search = '';
 
     public $employmentStatus = 'all';
@@ -118,7 +122,7 @@ class EmployeeFilter extends Component
         $departments = Department::orderBy('dept_name')
             ->when($visibility->isDepartmentScoped(), fn ($q) => $q->where('dept_no', $visibility->department() ?? EmployeeVisibility::NO_DEPARTMENT))
             ->get();
-        $jobTitles = DB::table('titles')->select('title')->distinct()->orderBy('title')->get();
+        $jobTitles = $this->jobTitles($visibility);
 
         return view('livewire.employee-filter', [
             'departments' => $departments,
@@ -126,5 +130,26 @@ class EmployeeFilter extends Component
             'departmentLocked' => $visibility->isDepartmentScoped(),
             'canSeeSalaries' => $visibility->canSeeSalaries(),
         ]);
+    }
+
+    /**
+     * Job titles offered in the filter. A manager only gets the titles held by
+     * employees of their department (no metadata about other departments),
+     * cached per department.
+     */
+    private function jobTitles(EmployeeVisibility $visibility): Collection
+    {
+        if (! $visibility->isDepartmentScoped()) {
+            return DB::table('titles')->select('title')->distinct()->orderBy('title')->get();
+        }
+
+        $key = 'job_titles:dept:'.($visibility->department() ?? EmployeeVisibility::NO_DEPARTMENT);
+
+        return Cache::remember($key, self::DEPARTMENT_TITLES_TTL, fn () => $visibility
+            ->constrain(DB::table('titles as t'), 't.emp_no')
+            ->select('t.title')
+            ->distinct()
+            ->orderBy('t.title')
+            ->get());
     }
 }
