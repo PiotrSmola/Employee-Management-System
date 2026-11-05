@@ -7,6 +7,7 @@ use App\Models\Employee;
 use App\Services\EmployeeExportService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\View;
 use Tests\Concerns\BuildsDirectory;
 use Tests\TestCase;
 
@@ -364,6 +365,58 @@ class EmployeeExportEndpointTest extends TestCase
     public function test_pdf_export_is_limited_to_the_first_thousand_employees(): void
     {
         $this->assertSame(1000, EmployeeExportService::PDF_LIMIT);
+    }
+
+    /**
+     * Export a PDF with a PDF limit of 3 and return [response, data passed to the PDF view].
+     *
+     * @return array{0: \Illuminate\Testing\TestResponse, 1: array<string, mixed>}
+     */
+    private function exportPdfWithLimitOfThree(array $payload): array
+    {
+        $this->app->instance(EmployeeExportService::class, new class extends EmployeeExportService
+        {
+            public const PDF_LIMIT = 3;
+        });
+
+        $data = [];
+        View::composer('exports.employees-pdf', function ($view) use (&$data) {
+            $data = $view->getData();
+        });
+
+        $response = $this->post(route('employees.export'), $payload + ['format' => 'pdf', 'selectAll' => '1']);
+        $response->assertOk()->assertHeader('Content-Type', 'application/pdf');
+
+        return [$response, $data];
+    }
+
+    public function test_limited_pdf_reports_the_real_selection_total(): void
+    {
+        [$response, $data] = $this->exportPdfWithLimitOfThree(['excludedEmployees' => [2]]);
+
+        $this->assertSame([1, 3, 4], $data['employees']->pluck('emp_no')->map(fn ($n) => (int) $n)->all());
+        $this->assertSame(3, $data['totalCount']);
+        $this->assertSame(6, $data['selectedCount'], 'all 7 employees except one, not the capped row count');
+        $this->assertTrue($data['isLimited']);
+        $this->assertStringContainsString('employees_selected_6_', $response->headers->get('Content-Disposition'));
+    }
+
+    public function test_pdf_with_exactly_the_limit_is_not_marked_as_limited(): void
+    {
+        [$response, $data] = $this->exportPdfWithLimitOfThree(['selectAll' => '0', 'selectedEmployees' => [1, 4, 7]]);
+
+        $this->assertSame(3, $data['totalCount']);
+        $this->assertSame(3, $data['selectedCount']);
+        $this->assertFalse($data['isLimited']);
+        $this->assertStringContainsString('employees_selected_3_', $response->headers->get('Content-Disposition'));
+    }
+
+    public function test_pdf_below_the_limit_is_not_marked_as_limited(): void
+    {
+        [, $data] = $this->exportPdfWithLimitOfThree(['gender' => 'F', 'employmentStatus' => 'former']);
+
+        $this->assertSame(2, $data['selectedCount']);
+        $this->assertFalse($data['isLimited']);
     }
 
     // ------------------------------------------------------ total earnings

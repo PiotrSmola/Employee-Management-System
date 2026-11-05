@@ -74,11 +74,14 @@ class EmployeeExportService
         set_time_limit(600);
         ini_set('memory_limit', '2G');
 
-        $ids = $query->ids(self::PDF_LIMIT);
+        $ids = $query->ids(static::PDF_LIMIT);
 
         if ($ids === []) {
             return back()->with('error', __('No employees found for export.'));
         }
+
+        // The PDF holds at most PDF_LIMIT rows; the selection itself may be larger.
+        $selectedCount = count($ids) < static::PDF_LIMIT ? count($ids) : $query->count();
 
         $earnings = $this->totalEarnings($ids);
         $employees = $query->rowsFor($ids)->map(fn ($employee) => (object) [
@@ -100,8 +103,9 @@ class EmployeeExportService
                 'employees' => $employees,
                 'exportDate' => now()->format('Y-m-d H:i:s'),
                 'totalCount' => $employees->count(),
-                'selectedCount' => count($ids),
-                'isLimited' => $employees->count() >= self::PDF_LIMIT,
+                'selectedCount' => $selectedCount,
+                'isLimited' => $selectedCount > static::PDF_LIMIT,
+                'limit' => static::PDF_LIMIT,
                 'filters' => $query->filters(),
             ])
                 ->setPaper('A4', 'landscape')
@@ -111,7 +115,7 @@ class EmployeeExportService
                     'defaultFont' => 'DejaVu Sans',
                 ]);
 
-            return $pdf->download('employees_selected_'.count($ids).'_'.date('Y-m-d_H-i-s').'.pdf');
+            return $pdf->download('employees_selected_'.$selectedCount.'_'.date('Y-m-d_H-i-s').'.pdf');
         } catch (\Exception $e) {
             report($e);
 

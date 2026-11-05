@@ -135,7 +135,8 @@
         <h1>Employee Export Report</h1>
         <div class="meta"> <strong>Generated on:</strong> {{ $exportDate }}<br> <strong>Total Records:</strong>
             {{ number_format($totalCount) }} employees @if (isset($isLimited) && $isLimited)
-                <br><span style="color: #dc3545;"><strong>Note:</strong> Limited to 1,000 records for PDF export</span>
+                <br><span style="color: #dc3545;"><strong>Note:</strong> Limited to the first {{ number_format($limit) }} of
+                    {{ number_format($selectedCount) }} selected records for PDF export</span>
             @endif
         </div>
     </div>
