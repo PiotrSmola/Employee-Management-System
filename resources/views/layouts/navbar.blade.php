@@ -7,43 +7,10 @@
 
         <div class="collapse navbar-collapse" id="navbarScroll">
             <ul class="navbar-nav me-auto my-2 my-lg-0">
-                <li class="nav-item">
-                    <a class="nav-link orange-after" href="{{ route('index') }}">
-                        <i class="bi bi-house me-1"></i>
-                        Dashboard
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link orange-after" href="{{ route('employees.index') }}">
-                        <i class="bi bi-list-ul me-1"></i>
-                        All Employees
-                    </a>
-                </li>
-                @can('export-data')
-                    <li class="nav-item">
-                        @if (Route::currentRouteName() === 'employees.index')
-                            <a class="nav-link orange-after" href="#" data-bs-toggle="modal"
-                                data-bs-target="#exportModal">
-                                <i class="bi bi-download me-1"></i>
-                                Export Data
-                            </a>
-                        @else
-                            <a class="nav-link orange-after" href="{{ route('employees.index') }}"
-                                title="Go to employees page to access export">
-                                <i class="bi bi-download me-1"></i>
-                                Export Data
-                            </a>
-                        @endif
-                    </li>
-                @endcan
-                @can('manage-users')
-                    <li class="nav-item">
-                        <a class="nav-link orange-after" href="{{ route('users.index') }}">
-                            <i class="bi bi-person-gear me-1"></i>
-                            {{ __('Users') }}
-                        </a>
-                    </li>
-                @endcan
+                {{-- Items: resources/views/layouts/nav/main/*.blade.php in file name order (docs/EXTENDING.md) --}}
+                @foreach (App\Support\Navigation::partials(App\Support\Navigation::MAIN) as $navItem)
+                    @include($navItem)
+                @endforeach
             </ul>
             <ul class="navbar-nav align-items-lg-center">
                 <li class="nav-item">
@@ -73,18 +40,10 @@
                                 @endif
                             </li>
                             <li><hr class="dropdown-divider"></li>
-                            <li>
-                                <a class="dropdown-item" href="{{ route('account.edit') }}">
-                                    <i class="bi bi-person me-2"></i>{{ __('My account') }}
-                                </a>
-                            </li>
-                            @can('manage-users')
-                                <li>
-                                    <a class="dropdown-item" href="{{ route('users.index') }}">
-                                        <i class="bi bi-people me-2"></i>{{ __('Users') }}
-                                    </a>
-                                </li>
-                            @endcan
+                            {{-- Items: resources/views/layouts/nav/user/*.blade.php in file name order --}}
+                            @foreach (App\Support\Navigation::partials(App\Support\Navigation::USER) as $navItem)
+                                @include($navItem)
+                            @endforeach
                             <li><hr class="dropdown-divider"></li>
                             <li>
                                 <form method="POST" action="{{ route('logout') }}">

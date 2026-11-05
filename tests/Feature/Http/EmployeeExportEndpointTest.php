@@ -396,8 +396,8 @@ class EmployeeExportEndpointTest extends TestCase
 
     public function test_the_export_endpoint_only_accepts_post(): void
     {
-        // /employees/export would otherwise be swallowed by /employees/{emp_no}
-        $this->get('/employees/export')->assertNotFound();
+        // {emp_no} only matches numbers, so the word is not taken for an employee number.
+        $this->get('/employees/export')->assertStatus(405);
     }
 
     // ------------------------------------------------------------------ PDF
