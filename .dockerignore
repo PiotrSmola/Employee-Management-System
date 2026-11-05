@@ -17,6 +17,8 @@ bootstrap/cache/*.php
 .env
 .env.*
 !.env.example
+# Test suite settings: never part of the image (also matched by .env.*, listed explicitly on purpose)
+.env.testing
 _ide_helper.php
 docker-compose.yml
 docker-up.*
