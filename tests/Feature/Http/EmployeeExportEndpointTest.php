@@ -198,6 +198,24 @@ class EmployeeExportEndpointTest extends TestCase
         $this->assertSame(7, DB::table('employees')->count());
     }
 
+    public function test_array_valued_filter_and_sort_params_fall_back_to_the_defaults(): void
+    {
+        [, $rows] = $this->exportCsv([
+            'search' => ['Smith'], 'employmentStatus' => ['current'], 'gender' => ['F'], 'department' => [$this->alpha->dept_no],
+            'jobTitle' => ['Engineer'], 'salaryMin' => ['60000'], 'salaryMax' => ['x' => 1], 'sortBy' => ['name'],
+            'sortDirection' => ['desc'], 'format' => ['pdf'],
+        ]);
+
+        $this->assertSame([1, 2, 3, 4, 5, 6, 7], $this->ids($rows), 'no filter, emp_no order, CSV');
+    }
+
+    public function test_array_valued_selection_params_are_ignored(): void
+    {
+        [, $rows] = $this->exportCsv(['selectAll' => ['1'], 'selectedEmployees' => [[1], 2, ['x' => 3]]]);
+
+        $this->assertSame([2], $this->ids($rows), 'selectAll[] is not "on"; nested ids are dropped');
+    }
+
     // ------------------------------------------------------ selection modes
 
     public function test_select_all_with_exclusions(): void

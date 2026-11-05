@@ -58,15 +58,26 @@ class EmployeeList extends Component
         $this->excludedEmployees = [];
     }
 
+    /**
+     * Apply the filters sent by the filter component. The payload comes from the
+     * client, so anything that is not an array is ignored and every value is
+     * normalized by EmployeeFilters (missing, invalid or non-scalar -> no filter).
+     */
     public function updateFilters($filters)
     {
-        $this->search = $filters['search'] ?? '';
-        $this->employmentStatus = $filters['employmentStatus'] ?? 'all';
-        $this->gender = $filters['gender'] ?? 'all';
-        $this->department = $filters['department'] ?? 'all';
-        $this->salaryMin = $filters['salaryMin'] ?? '';
-        $this->salaryMax = $filters['salaryMax'] ?? '';
-        $this->jobTitleFilter = $filters['jobTitle'] ?? 'all';
+        if (! is_array($filters)) {
+            return;
+        }
+
+        $sanitized = EmployeeFilters::fromArray($filters);
+
+        $this->search = $sanitized->search;
+        $this->employmentStatus = $sanitized->employmentStatus;
+        $this->gender = $sanitized->gender;
+        $this->department = $sanitized->department;
+        $this->salaryMin = $sanitized->salaryMin === null ? '' : (string) $sanitized->salaryMin;
+        $this->salaryMax = $sanitized->salaryMax === null ? '' : (string) $sanitized->salaryMax;
+        $this->jobTitleFilter = $sanitized->jobTitle;
 
         $this->resetPage();
         $this->resetSelection();

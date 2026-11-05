@@ -285,10 +285,13 @@ class EmployeeSearchQueryTest extends TestCase
 
     public function test_array_valued_input_is_treated_as_invalid_instead_of_crashing(): void
     {
-        $this->markTestIncomplete('BUG: EmployeeFilters::fromArray() casts input with (string) without checking for arrays, so sortBy[]=x (also search[], gender[], ...) in the export request raises "Array to string conversion" (HTTP 500) instead of falling back to the defaults.');
+        $filters = EmployeeFilters::fromArray([
+            'sortBy' => ['name'], 'sortDirection' => ['desc'], 'search' => ['x'], 'employmentStatus' => ['current'],
+            'gender' => ['F'], 'department' => ['d001'], 'jobTitle' => ['Engineer'], 'salaryMin' => ['1'], 'salaryMax' => [2],
+        ]);
 
-        $filters = EmployeeFilters::fromArray(['sortBy' => ['name'], 'search' => ['x']]);
-        $this->assertSame('emp_no', $filters->sortBy);
+        $this->assertEquals(new EmployeeFilters, $filters, 'every non-scalar value falls back to its default');
+        $this->assertResult([1, 2, 3, 4, 5, 6, 7], ['sortBy' => ['name'], 'search' => ['x'], 'gender' => (object) ['F']]);
     }
 
     public function test_sort_direction_is_case_insensitive(): void

@@ -121,6 +121,42 @@ class EmployeeListComponentTest extends TestCase
             ->assertSee('7 employee(s) found');
     }
 
+    public function test_update_filters_sanitizes_the_payload(): void
+    {
+        Livewire::test(EmployeeList::class)
+            ->call('updateFilters', [
+                'search' => ['Smith'], 'employmentStatus' => 'bogus', 'gender' => ['F'], 'department' => ['d001'],
+                'salaryMin' => 'abc', 'salaryMax' => ['80000'], 'jobTitle' => (object) ['Engineer'],
+            ])
+            ->assertSet('search', '')
+            ->assertSet('employmentStatus', 'all')
+            ->assertSet('gender', 'all')
+            ->assertSet('department', 'all')
+            ->assertSet('salaryMin', '')
+            ->assertSet('salaryMax', '')
+            ->assertSet('jobTitleFilter', 'all')
+            ->assertSee('7 employee(s) found')
+            ->call('updateFilters', ['gender' => 'M', 'salaryMin' => '0', 'salaryMax' => '70000.5', 'department' => ''])
+            ->assertSet('gender', 'M')
+            ->assertSet('salaryMin', '')
+            ->assertSet('salaryMax', '70000.5')
+            ->assertSet('department', 'all');
+    }
+
+    public function test_update_filters_ignores_non_array_payloads(): void
+    {
+        $component = Livewire::test(EmployeeList::class)
+            ->call('updateFilters', $this->filters(['gender' => 'F']))
+            ->call('toggleEmployee', 1);
+
+        foreach (['F', 42, null, true] as $payload) {
+            $component->call('updateFilters', $payload)
+                ->assertHasNoErrors()
+                ->assertSet('gender', 'F')
+                ->assertSet('excludedEmployees', [1], 'an ignored payload does not reset the selection either');
+        }
+    }
+
     public function test_each_filter_narrows_the_list(): void
     {
         $component = Livewire::test(EmployeeList::class);
