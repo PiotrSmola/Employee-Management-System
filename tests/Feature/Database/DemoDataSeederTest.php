@@ -108,6 +108,39 @@ class DemoDataSeederTest extends TestCase
                 ->sum(fn ($d) => EmployeeSearchQuery::make(['department' => $d])->count()), 'every employee belongs to exactly one department');
     }
 
+    public function test_seeding_is_reproducible(): void
+    {
+        (new DemoDataSeeder)->run(60);
+        $first = $this->snapshot();
+
+        foreach (['dept_manager', 'dept_emp', 'titles', 'salaries', 'employees'] as $table) {
+            DB::table($table)->delete();
+        }
+
+        (new DemoDataSeeder)->run(60);
+        $second = $this->snapshot();
+
+        $this->assertGreaterThan(0, collect($first)->filter(fn ($e) => count($e['departments']) > 1)->count(), 'some employees were transferred');
+        $this->assertSame($first, $second);
+    }
+
+    /**
+     * Every employee (in creation order) with the department history, independent of emp_no values.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function snapshot(): array
+    {
+        $history = DB::table('dept_emp')->orderBy('from_date')->orderBy('dept_no')->get()->groupBy('emp_no');
+
+        return DB::table('employees')->orderBy('emp_no')->get()->map(fn ($e) => [
+            'name' => $e->first_name.' '.$e->last_name,
+            'hire_date' => $e->hire_date,
+            'departments' => collect($history[$e->emp_no] ?? [])
+                ->map(fn ($d) => $d->dept_no.' '.$d->from_date.' '.$d->to_date)->all(),
+        ])->all();
+    }
+
     public function test_existing_departments_are_reused(): void
     {
         Department::factory()->create(['dept_no' => 'd001', 'dept_name' => 'Marketing']);

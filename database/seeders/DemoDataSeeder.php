@@ -74,7 +74,10 @@ class DemoDataSeeder extends Seeder
                     'department' => $departments[$deptNo],
                     'title' => $promoted ? $senior : $junior,
                     'salary' => fake()->numberBetween(40000, $promoted ? 110000 : 80000),
-                    'previousDepartment' => $transferred ? $departments->except($deptNo)->random() : null,
+                    // Picked with the seeded faker (Collection::random() is not reproducible).
+                    'previousDepartment' => $transferred
+                        ? $departments[fake()->randomElement(array_values(array_diff(array_keys(self::DEPARTMENTS), [$deptNo])))]
+                        : null,
                     'previousTitle' => $promoted ? $junior : null,
                 ];
 
