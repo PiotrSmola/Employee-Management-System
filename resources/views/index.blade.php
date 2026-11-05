@@ -14,6 +14,12 @@
                         Employee Management System
                     </h1>
                     <p class="lead text-muted">Comprehensive employee data management and analytics platform</p>
+                    @if ($isDepartmentScoped)
+                        <span class="badge text-bg-warning role-badge fs-6">
+                            <i class="bi bi-diagram-3 me-1"></i>
+                            {{ __('Your department: :name', ['name' => $scopeDepartment?->dept_name ?? __('none assigned')]) }}
+                        </span>
+                    @endif
                 </div>
             </div>
         </div>
@@ -25,7 +31,9 @@
                     <div class="card-body text-center">
                         <i class="bi bi-people display-4 mb-3 opacity-75"></i>
                         <h3 class="card-title fw-bold">{{ number_format($totalEmployees) }}</h3>
-                        <p class="card-text opacity-90">Total Employees</p>
+                        <p class="card-text opacity-90">
+                            {{ $isDepartmentScoped ? __('Current Employees in Your Department') : 'Total Employees' }}
+                        </p>
                     </div>
                 </div>
             </div>
@@ -34,8 +42,13 @@
                 <div class="card gradient-card-2 text-white h-100">
                     <div class="card-body text-center">
                         <i class="bi bi-diagram-3 display-4 mb-3 opacity-75"></i>
-                        <h3 class="card-title fw-bold">{{ $totalDepartments }}</h3>
-                        <p class="card-text opacity-90">Departments</p>
+                        @if ($isDepartmentScoped)
+                            <h3 class="card-title fw-bold">{{ $scopeDepartment?->dept_name ?? '-' }}</h3>
+                            <p class="card-text opacity-90">{{ __('Your Department') }}</p>
+                        @else
+                            <h3 class="card-title fw-bold">{{ $totalDepartments }}</h3>
+                            <p class="card-text opacity-90">Departments</p>
+                        @endif
                     </div>
                 </div>
             </div>
@@ -46,7 +59,9 @@
                         <div class="card-body text-center">
                             <i class="bi bi-currency-dollar display-4 mb-3 opacity-75"></i>
                             <h3 class="card-title fw-bold">${{ number_format($averageSalary, 0) }}</h3>
-                            <p class="card-text opacity-90">Average Salary</p>
+                            <p class="card-text opacity-90">
+                                {{ $isDepartmentScoped ? __('Average Salary in Your Department') : 'Average Salary' }}
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -58,7 +73,7 @@
             <div class="col-12 text-center">
                 <a href="{{ route('employees.index') }}" class="btn btn-primary btn-lg me-3 mb-3">
                     <i class="bi bi-list-ul me-2"></i>
-                    Browse All Employees
+                    {{ $isDepartmentScoped ? __('Browse Your Employees') : 'Browse All Employees' }}
                 </a>
             </div>
         </div>
@@ -98,6 +113,33 @@
             </div>
 
             <div class="col-lg-6">
+                @if ($isDepartmentScoped)
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-light">
+                        <h5 class="card-title mb-0">
+                            <i class="bi bi-pie-chart me-2 text-primary"></i>
+                            {{ __('Employees by Job Title') }}
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        @forelse($employeesByTitle as $title)
+                            <div
+                                class="d-flex justify-content-between align-items-center mb-3 {{ !$loop->last ? 'border-bottom pb-3' : '' }}">
+                                <div class="flex-grow-1">
+                                    <div class="fw-semibold">{{ $title->title }}</div>
+                                    <div class="progress mt-1" style="height: 5px;">
+                                        <div class="progress-bar bg-primary"
+                                            style="width: {{ $totalEmployees > 0 ? ($title->total / $totalEmployees) * 100 : 0 }}%"></div>
+                                    </div>
+                                </div>
+                                <span class="badge bg-info text-dark ms-3">{{ number_format($title->total) }}</span>
+                            </div>
+                        @empty
+                            <p class="text-muted text-center">{{ __('No job title data found') }}</p>
+                        @endforelse
+                    </div>
+                </div>
+                @else
                 <div class="card shadow-sm h-100">
                     <div class="card-header bg-light">
                         <h5 class="card-title mb-0">
@@ -113,7 +155,7 @@
                                     <div class="fw-semibold">{{ $dept->dept_name }}</div>
                                     <div class="progress mt-1" style="height: 5px;">
                                         <div class="progress-bar bg-primary"
-                                            style="width: {{ ($dept->total / $totalEmployees) * 100 }}%"></div>
+                                            style="width: {{ $totalEmployees > 0 ? ($dept->total / $totalEmployees) * 100 : 0 }}%"></div>
                                     </div>
                                 </div>
                                 <span class="badge bg-info text-dark ms-3">{{ number_format($dept->total) }}</span>
@@ -123,6 +165,7 @@
                         @endforelse
                     </div>
                 </div>
+                @endif
             </div>
         </div>
     </main>

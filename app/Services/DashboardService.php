@@ -25,6 +25,7 @@ class DashboardService
 
     /**
      * @return array{
+     *     isDepartmentScoped: bool,
      *     scopeDepartment: ?Department,
      *     totalEmployees: int,
      *     totalDepartments: int,
@@ -56,6 +57,7 @@ class DashboardService
             ->get());
 
         return [
+            'isDepartmentScoped' => false,
             'scopeDepartment' => null,
             'totalEmployees' => $stats['totalEmployees'],
             'totalDepartments' => $stats['totalDepartments'],
@@ -79,6 +81,7 @@ class DashboardService
 
         if ($department === null) {
             return [
+                'isDepartmentScoped' => true,
                 'scopeDepartment' => null,
                 'totalEmployees' => 0,
                 'totalDepartments' => 0,
@@ -109,6 +112,7 @@ class DashboardService
             ->get());
 
         return [
+            'isDepartmentScoped' => true,
             'scopeDepartment' => $department,
             'totalEmployees' => $stats['totalEmployees'],
             'totalDepartments' => 1,
