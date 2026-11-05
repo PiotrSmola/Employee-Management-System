@@ -6,6 +6,8 @@ use App\Http\Requests\Auth\LoginRequest;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
 
 class LoginTest extends TestCase
@@ -50,6 +52,12 @@ class LoginTest extends TestCase
         $this->assertNotNull($user->fresh()->last_login_at);
     }
 
+    /**
+     * Guards App\Support\SessionPasswordHash: Laravel's AuthenticateSession keeps the
+     * password hash under "password_hash_web" and only stores it when missing, so a
+     * stale value from another account used to sign the new user out right away.
+     * Fails if a framework upgrade renames that session key.
+     */
     public function test_sign_in_works_in_a_session_left_over_from_another_account(): void
     {
         User::factory()->create(['email' => 'jane@example.com']);
@@ -120,6 +128,73 @@ class LoginTest extends TestCase
 
         $this->assertGuest();
         $this->assertStringContainsString('Too many login attempts', session('errors')->first('email'));
+    }
+
+    public function test_throttling_one_email_does_not_lock_other_accounts_or_addresses(): void
+    {
+        User::factory()->create(['email' => 'jane@example.com']);
+        User::factory()->create(['email' => 'bob@example.com']);
+
+        for ($i = 0; $i < LoginRequest::MAX_ATTEMPTS; $i++) {
+            $this->post(route('login.store'), ['email' => 'jane@example.com', 'password' => 'wrong']);
+        }
+
+        // Another account from the same address still works ...
+        $this->post(route('login.store'), ['email' => 'bob@example.com', 'password' => 'password'])
+            ->assertRedirect(route('index'));
+        $this->post(route('logout'));
+
+        // ... and so does the locked e-mail from another address.
+        $this->withServerVariables(['REMOTE_ADDR' => '10.0.0.2'])
+            ->post(route('login.store'), ['email' => 'jane@example.com', 'password' => 'password'])
+            ->assertRedirect(route('index'));
+    }
+
+    public function test_one_address_is_throttled_across_all_emails(): void
+    {
+        User::factory()->create(['email' => 'jane@example.com']);
+
+        for ($i = 0; $i < LoginRequest::MAX_ATTEMPTS_PER_IP; $i++) {
+            $this->post(route('login.store'), ['email' => "guess{$i}@example.com", 'password' => 'wrong']);
+        }
+
+        $this->post(route('login.store'), ['email' => 'jane@example.com', 'password' => 'password'])
+            ->assertSessionHasErrors('email');
+        $this->assertGuest();
+        $this->assertStringContainsString('Too many login attempts', session('errors')->first('email'));
+
+        // Other addresses are not affected.
+        $this->withServerVariables(['REMOTE_ADDR' => '10.0.0.3'])
+            ->post(route('login.store'), ['email' => 'jane@example.com', 'password' => 'password'])
+            ->assertRedirect(route('index'));
+    }
+
+    public function test_inactive_account_with_a_wrong_password_gets_the_generic_message(): void
+    {
+        User::factory()->inactive()->create(['email' => 'jane@example.com']);
+
+        $this->post(route('login.store'), ['email' => 'jane@example.com', 'password' => 'wrong'])
+            ->assertSessionHasErrors(['email' => __('auth.failed')]);
+
+        $this->assertStringNotContainsString('deactivated', session('errors')->first('email'));
+    }
+
+    public function test_unknown_email_still_checks_a_password_hash(): void
+    {
+        $key = 'auth:login-dummy-hash:'.config('hashing.driver');
+        User::factory()->create(['email' => 'jane@example.com']);
+
+        // A known e-mail checks the account's own hash ...
+        $this->post(route('login.store'), ['email' => 'jane@example.com', 'password' => 'wrong']);
+        $this->assertFalse(Cache::has($key));
+
+        // ... an unknown one checks against a dummy hash made with the same settings.
+        $this->post(route('login.store'), ['email' => 'nobody@example.com', 'password' => 'whatever'])
+            ->assertSessionHasErrors(['email' => __('auth.failed')]);
+
+        $this->assertTrue(Cache::has($key));
+        $this->assertTrue(Hash::isHashed(Cache::get($key)));
+        $this->assertFalse(Hash::needsRehash(Cache::get($key)));
     }
 
     public function test_signed_in_user_is_redirected_away_from_the_login_page(): void

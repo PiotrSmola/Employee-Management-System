@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\SessionPasswordHash;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -44,6 +45,7 @@ class AccountController extends Controller
         // hash changed); keep this one, including a "remember me" cookie.
         Auth::guard('web')->login($user, $request->hasCookie(Auth::guard('web')->getRecallerName()));
         $request->session()->regenerate();
+        SessionPasswordHash::store($request, $user, 'web');
 
         return redirect()->route('account.edit')->with('status', __('Your password has been changed.'));
     }

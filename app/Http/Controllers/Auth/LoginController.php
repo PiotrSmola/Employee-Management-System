@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
+use App\Support\SessionPasswordHash;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -26,10 +27,9 @@ class LoginController extends Controller
 
         $request->session()->regenerate();
 
-        // The auth.session middleware compares this hash on every request; a value
-        // left in the session by a previous (e.g. since deleted) account would sign
-        // the new user out immediately.
-        $request->session()->put('password_hash_'.Auth::getDefaultDriver(), $user->getAuthPassword());
+        // Replace a password hash left in the session by a previous account,
+        // which would make auth.session sign the new user out (see SessionPasswordHash).
+        SessionPasswordHash::store($request, $user, 'web');
 
         // Not a profile change - keep updated_at as it is.
         $user->timestamps = false;
