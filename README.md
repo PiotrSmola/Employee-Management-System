@@ -9,6 +9,7 @@ A comprehensive web-based employee management platform built with Laravel 11, de
 - **Individual Employee Profiles**: Detailed view with employment history, salary progression, and department changes
 - **Department Management**: View departmental structure and employee distribution
 - **Dashboard Analytics**: Real-time statistics and insights with caching for optimal performance
+- **Accounts & Roles**: Sign-in, four roles (admin, HR, manager, viewer), department-scoped managers, salary data only for authorized roles, admin user management
 
 ### Advanced Features
 - **Export Capabilities**: Generate PDF reports for individual employees and bulk data exports
@@ -89,10 +90,53 @@ After code changes, run the start script again – it rebuilds the app image.
 
 On start the app container runs `php artisan migrate`. On the imported dataset the
 schema migrations are no-ops; the first run adds the directory indexes online
-(roughly 45 s on the full dataset, the tables stay usable meanwhile).
+(roughly 45 s on the full dataset, the tables stay usable meanwhile). It then runs the
+`UserSeeder`, which creates the initial accounts if they do not exist yet (see
+[Accounts and Roles](#accounts-and-roles)). Set `ADMIN_EMAIL` / `ADMIN_PASSWORD`
+(and `SEED_DEMO_USERS=false` to skip the demo accounts) in `.env.docker` before the first start.
 
 > Never run `migrate:fresh`, `migrate:refresh` or `db:wipe` against the Docker
 > database – they drop the imported employees dataset.
+
+## Accounts and Roles
+
+Every page requires signing in (`/login`). There is no public registration and no e-mail
+password reset – administrators create accounts and reset passwords under **Users**; everyone
+can change their own name and password under **My account**.
+
+| Role | Sees | Salaries | Can also |
+|------|------|:--------:|----------|
+| **Admin** | all employees | ✓ | manage users, employees and departments, export, import, reports, audit log |
+| **HR** | all employees | ✓ | manage employees and departments, export, import, reports, audit log |
+| **Manager** | employees of their own department (current, and former ones whose last department it was) | ✓ | export (own department), reports |
+| **Viewer** | all employees | – | read-only, no salary data anywhere, no bulk export |
+
+Details, the exact Gate names and how to apply the manager scope in new code:
+[docs/AUTHORIZATION.md](docs/AUTHORIZATION.md).
+
+### Default accounts
+
+Created by `php artisan db:seed --class=UserSeeder` (also part of `php artisan db:seed` and of
+every Docker start). The seeder only creates missing accounts – it never changes an existing
+one or its password.
+
+| E-mail | Password | Role |
+|--------|----------|------|
+| `ADMIN_EMAIL` (default `admin@example.com`) | `ADMIN_PASSWORD` (default `password`) | Admin |
+| `hr@example.com` | `password` | HR |
+| `manager@example.com` | `password` | Manager of department `d005` (Development) |
+| `viewer@example.com` | `password` | Viewer |
+
+> **Change these passwords** (or delete the demo accounts) right after the first sign-in,
+> and set `SEED_DEMO_USERS=false` on any installation that is not a demo.
+
+### Creating users
+
+Sign in as an administrator → **Users** → **New user**: name, e-mail, role, department (managers
+only, required for them), initial password and the active flag. Give the password to the user,
+who can change it under **My account**. Deactivated users cannot sign in and are signed out
+on their next request; resetting a password signs the user out everywhere. Administrators cannot
+delete, deactivate or demote themselves, and the last active administrator is protected.
 
 ## Manual Installation
 
@@ -139,11 +183,13 @@ The migrations create the dataset tables (`employees`, `departments`, `dept_emp`
 `dept_manager`, `titles`, `salaries`) with the same structure as the sample database.
 If the tables already exist (e.g. the dataset was imported), they are left untouched.
 
-### 6. Seed Demo Data (Optional)
+### 6. Seed Accounts and Demo Data
 ```bash
 php artisan db:seed
 ```
-Adds a small demo dataset (9 departments, ~200 employees with histories) – only
+Creates the initial accounts (see [Default accounts](#default-accounts); only
+`php artisan db:seed --class=UserSeeder` for just the accounts) and adds a small demo
+dataset (9 departments, ~200 employees with histories) – the latter only
 when the `employees` table is empty. For the full dataset import
 [test_db](https://github.com/datacharmer/test_db) instead.
 
@@ -225,12 +271,20 @@ Typical timings on the full dataset (Docker, warm-ish cache): unfiltered list ~0
 single filters and sorts 0.1–0.6 s, combined filters up to ~2 s, full CSV export of all
 300k employees ~50 s (streamed).
 
+The role restrictions do not change this: a viewer's list (salary data stripped) renders like an
+administrator's (~0.1–0.2 s). A manager's list is the department filter on their department
+(~0.2–0.4 s for the largest one, d005 with ~77k current and former employees; its total is
+counted on `dept_emp` alone). The department dashboard of a manager takes ~2 s for the largest
+department on a cache miss and is cached for 15 minutes per department.
+
 ## Running Tests
 
 The suite uses MySQL and a dedicated database (`testing` by default, see `phpunit.xml`
 and `.env.testing`). It is wiped on every run (`RefreshDatabase`); `tests/TestCase.php`
 refuses to run against `employees_management`. Tests build their data with factories
-and never depend on the imported dataset.
+and never depend on the imported dataset. Feature tests that open pages or Livewire components
+use `tests/Concerns/ActsAsAdmin.php` (signed in as an active administrator; `signInAs(Role::Viewer)`
+etc. switches the role); the authorization rules are covered in `tests/Feature/Auth`.
 
 Tests need the Composer **dev** dependencies (PHPUnit, Faker, …). The Docker app image is
 built with `composer install --no-dev`, so `docker compose exec app php artisan test`
@@ -250,11 +304,14 @@ variables take precedence over `phpunit.xml` / `.env.testing`).
 
 The application provides the following main routes:
 
-- `GET /` - Dashboard
+- `GET|POST /login`, `POST /logout` - Sign in / out (everything else requires a signed-in, active user)
+- `GET /` - Dashboard (department figures for managers)
 - `GET /employees` - Employee directory
-- `GET /employees/{emp_no}` - Individual employee profile
-- `POST /employees/export` - Bulk export functionality
+- `GET /employees/{emp_no}` - Individual employee profile (managers: own department only)
+- `POST /employees/export` - Bulk export functionality (`export-data`)
 - `GET /employees/{emp_no}/export-pdf` - Individual PDF export
+- `GET /account`, `PUT /account/profile`, `PUT /account/password` - My account
+- `/users` (resource without `show`), `PUT /users/{user}/password` - User management (`manage-users`)
 
 ## Configuration
 
