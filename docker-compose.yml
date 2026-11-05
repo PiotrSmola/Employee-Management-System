@@ -26,6 +26,10 @@ services:
       SESSION_DRIVER: file
       CACHE_DRIVER: file
       QUEUE_CONNECTION: sync
+      # Initial accounts created by the UserSeeder on start (only if missing) - change the passwords!
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-password}
+      SEED_DEMO_USERS: ${SEED_DEMO_USERS:-true}
     depends_on:
       db:
         condition: service_healthy

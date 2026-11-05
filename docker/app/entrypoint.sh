@@ -13,6 +13,10 @@ fi
 # is imported by the database container on its first start.
 php artisan migrate --force --no-interaction
 
+# Initial administrator (ADMIN_EMAIL / ADMIN_PASSWORD) and demo accounts; existing
+# accounts are never changed, so this is safe on every start.
+php artisan db:seed --class=UserSeeder --force --no-interaction
+
 php artisan view:cache >/dev/null
 
 chown -R www-data:www-data storage bootstrap/cache

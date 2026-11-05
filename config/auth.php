@@ -112,4 +112,23 @@ return [
 
     'password_timeout' => env('AUTH_PASSWORD_TIMEOUT', 10800),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Initial Accounts (Database\Seeders\UserSeeder)
+    |--------------------------------------------------------------------------
+    |
+    | The administrator account created when it does not exist yet, and whether
+    | the hr@ / manager@ / viewer@example.com demo accounts are created too.
+    | Existing accounts are never modified by the seeder.
+    |
+    */
+
+    'initial_admin' => [
+        'email' => env('ADMIN_EMAIL', 'admin@example.com'),
+        'password' => env('ADMIN_PASSWORD', 'password'),
+        'name' => env('ADMIN_NAME', 'Administrator'),
+    ],
+
+    'seed_demo_users' => (bool) env('SEED_DEMO_USERS', true),
+
 ];

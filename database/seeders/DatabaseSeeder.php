@@ -8,11 +8,13 @@ use Illuminate\Support\Facades\DB;
 class DatabaseSeeder extends Seeder
 {
     /**
-     * Seed demo data only into an empty database - never on top of an
-     * imported employees dataset.
+     * The initial accounts (idempotent), then demo data - the latter only into
+     * an empty database, never on top of an imported employees dataset.
      */
     public function run(): void
     {
+        $this->call(UserSeeder::class);
+
         if (DB::table('employees')->exists()) {
             $this->command?->warn('The employees table is not empty - skipping the demo data.');
 
