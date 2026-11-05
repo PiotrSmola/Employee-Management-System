@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ActivityLog;
+use App\Services\AuditLogger;
 use App\Support\SessionPasswordHash;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -26,7 +28,14 @@ class AccountController extends Controller
             'name' => ['required', 'string', 'max:255'],
         ]);
 
-        $request->user()->update($validated);
+        $user = $request->user();
+        $before = $user->only('name');
+        $user->update($validated);
+
+        $changes = AuditLogger::diff($before, $user->only('name'));
+        if ($changes !== []) {
+            AuditLogger::log('user.updated', ActivityLog::SUBJECT_USER, $user->id, $changes, $user);
+        }
 
         return redirect()->route('account.edit')->with('status', __('Your name has been updated.'));
     }
@@ -46,6 +55,8 @@ class AccountController extends Controller
         Auth::guard('web')->login($user, $request->hasCookie(Auth::guard('web')->getRecallerName()));
         $request->session()->regenerate();
         SessionPasswordHash::store($request, $user, 'web');
+
+        AuditLogger::log('user.password_changed', ActivityLog::SUBJECT_USER, $user->id, [], $user);
 
         return redirect()->route('account.edit')->with('status', __('Your password has been changed.'));
     }

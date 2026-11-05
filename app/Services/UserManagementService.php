@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Enums\Role;
+use App\Models\ActivityLog;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -13,9 +14,15 @@ use Illuminate\Validation\ValidationException;
  * keep the application administrable:
  *  - administrators cannot delete, deactivate or demote themselves;
  *  - there is always at least one active administrator.
+ *
+ * Every change is written to the audit log (user.created, user.updated,
+ * user.role_changed, user.password_reset, user.deleted; never a password).
  */
 class UserManagementService
 {
+    /** Account fields recorded in the audit log. */
+    public const AUDITED_FIELDS = ['name', 'email', 'role', 'dept_no', 'is_active'];
+
     /**
      * @param  array{name: string, email: string, password: string, role: Role|string, dept_no?: ?string, is_active?: bool}  $data
      */
@@ -23,14 +30,22 @@ class UserManagementService
     {
         $role = Role::from($data['role'] instanceof Role ? $data['role']->value : $data['role']);
 
-        return User::create([
-            'name' => $data['name'],
-            'email' => Str::lower($data['email']),
-            'password' => $data['password'],
-            'role' => $role,
-            'dept_no' => $role->isDepartmentScoped() ? ($data['dept_no'] ?? null) : null,
-            'is_active' => (bool) ($data['is_active'] ?? true),
-        ]);
+        return DB::transaction(function () use ($data, $role) {
+            $user = User::create([
+                'name' => $data['name'],
+                'email' => Str::lower($data['email']),
+                'password' => $data['password'],
+                'role' => $role,
+                'dept_no' => $role->isDepartmentScoped() ? ($data['dept_no'] ?? null) : null,
+                'is_active' => (bool) ($data['is_active'] ?? true),
+            ]);
+
+            AuditLogger::log('user.created', ActivityLog::SUBJECT_USER, $user->id, [
+                'after' => AuditLogger::values($user->only(self::AUDITED_FIELDS)),
+            ]);
+
+            return $user;
+        });
     }
 
     /**
@@ -60,6 +75,8 @@ class UserManagementService
                 ]);
             }
 
+            $before = $user->only(self::AUDITED_FIELDS);
+
             $user->fill([
                 'name' => $data['name'],
                 'email' => Str::lower($data['email']),
@@ -75,6 +92,17 @@ class UserManagementService
 
             $user->save();
 
+            $changes = AuditLogger::diff($before, $user->only(self::AUDITED_FIELDS));
+            if ($changes !== []) {
+                AuditLogger::log('user.updated', ActivityLog::SUBJECT_USER, $user->id, $changes);
+            }
+            if (array_key_exists('role', $changes['after'] ?? [])) {
+                AuditLogger::log('user.role_changed', ActivityLog::SUBJECT_USER, $user->id, [
+                    'before' => ['role' => $changes['before']['role']],
+                    'after' => ['role' => $changes['after']['role']],
+                ]);
+            }
+
             return $user;
         });
     }
@@ -89,6 +117,8 @@ class UserManagementService
             'password' => $password,
             'remember_token' => Str::random(60),
         ])->save();
+
+        AuditLogger::log('user.password_reset', ActivityLog::SUBJECT_USER, $user->id);
     }
 
     /**
@@ -107,7 +137,10 @@ class UserManagementService
                 throw ValidationException::withMessages(['user' => __('At least one active administrator is required.')]);
             }
 
+            $before = AuditLogger::values($user->only(self::AUDITED_FIELDS));
             $user->delete();
+
+            AuditLogger::log('user.deleted', ActivityLog::SUBJECT_USER, $user->id, ['before' => $before]);
         });
     }
 

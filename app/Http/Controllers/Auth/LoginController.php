@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
+use App\Models\ActivityLog;
+use App\Services\AuditLogger;
 use App\Support\SessionPasswordHash;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -35,6 +37,10 @@ class LoginController extends Controller
         $user->timestamps = false;
         $user->forceFill(['last_login_at' => now()])->save();
         $user->timestamps = true;
+
+        AuditLogger::log('auth.login', ActivityLog::SUBJECT_USER, $user->id, [
+            'remember' => $request->boolean('remember'),
+        ], $user);
 
         return redirect()->intended(route('index'));
     }

@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests\Auth;
 
+use App\Models\ActivityLog;
 use App\Models\User;
+use App\Services\AuditLogger;
 use Illuminate\Auth\Events\Lockout;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Auth;
@@ -52,15 +54,15 @@ class LoginRequest extends FormRequest
 
         if (! $user instanceof User) {
             Hash::check((string) $credentials['password'], self::dummyHash());
-            $this->failed(__('auth.failed'));
+            $this->failed(__('auth.failed'), null, 'unknown_email');
         }
 
         if (! $provider->validateCredentials($user, $credentials)) {
-            $this->failed(__('auth.failed'));
+            $this->failed(__('auth.failed'), $user, 'invalid_password');
         }
 
         if (! $user->is_active) {
-            $this->failed(__('Your account has been deactivated. Please contact an administrator.'));
+            $this->failed(__('Your account has been deactivated. Please contact an administrator.'), $user, 'inactive');
         }
 
         $guard->login($user, $this->boolean('remember'));
@@ -70,12 +72,21 @@ class LoginRequest extends FormRequest
     }
 
     /**
+     * Count the failed attempt, record it in the audit log (attempted e-mail and
+     * reason, never the password) and reject the login. Throttled requests are
+     * not logged, so the log grows at most at the rate limit.
+     *
      * @throws ValidationException
      */
-    private function failed(string $message): never
+    private function failed(string $message, ?User $user, string $reason): never
     {
         RateLimiter::hit($this->throttleKey(), self::DECAY_SECONDS);
         RateLimiter::hit($this->ipThrottleKey(), self::DECAY_SECONDS);
+
+        AuditLogger::log('auth.login_failed', ActivityLog::SUBJECT_USER, $user?->id, [
+            'email' => Str::limit(Str::lower((string) $this->input('email')), 255, ''),
+            'reason' => $reason,
+        ]);
 
         throw ValidationException::withMessages(['email' => $message]);
     }
