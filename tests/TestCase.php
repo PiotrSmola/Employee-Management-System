@@ -17,9 +17,9 @@ abstract class TestCase extends BaseTestCase
     {
         $app = parent::createApplication();
 
-        // phpunit.xml asks for array cache/session, but a CACHE_DRIVER / SESSION_DRIVER already present in the
-        // process environment (e.g. the docker image) wins over it. Cached dashboard figures would then leak
-        // from one test (and one run) into the next, so pin the stores here.
+        // phpunit.xml forces array cache/session over the process environment (the docker image sets file
+        // drivers). Pinned here as well, so that cached dashboard figures can never leak from one test (or
+        // one run) into the next, even when the suite is started with another PHPUnit configuration.
         $app['config']->set('cache.default', 'array');
         $app['config']->set('session.driver', 'array');
 
