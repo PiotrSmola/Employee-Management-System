@@ -469,25 +469,25 @@
                 transform: none;
             }
 
-            .table td:nth-child(2) {
+            .table td.col-name {
                 padding: 0.5rem 0.5rem;
             }
 
-            .table td:nth-child(2) .fw-semibold {
+            .table td.col-name .fw-semibold {
                 font-size: 0.85rem;
                 margin-bottom: 0.25rem;
             }
 
-            .table td:nth-child(2) small {
+            .table td.col-name small {
                 font-size: 0.65rem;
             }
 
-            .table td:nth-child(3) .badge {
+            .table td.col-department .badge {
                 font-size: 0.85rem;
                 padding: 0.35em 0.55em;
             }
 
-            .table td:nth-child(5) .badge {
+            .table td.col-salary .badge {
                 font-size: 0.85rem;
                 padding: 0.55em 0.75em;
             }
@@ -549,11 +549,11 @@
                 font-size: 0.9rem;
             }
 
-            .table td:nth-child(2) .fw-semibold {
+            .table td.col-name .fw-semibold {
                 font-size: 0.9rem;
             }
 
-            .table td:nth-child(2) small {
+            .table td.col-name small {
                 font-size: 0.7rem;
             }
 

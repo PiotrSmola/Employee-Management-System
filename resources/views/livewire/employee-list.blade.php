@@ -122,7 +122,7 @@
                                     </td>
                                 @endif
                                 <td class="emp-number">{{ $employee->emp_no }}</td>
-                                <td style="cursor: pointer;"
+                                <td class="col-name" style="cursor: pointer;"
                                     onclick="window.location='{{ route('employees.show', $employee->emp_no) }}'">
                                     <div class="fw-semibold">
                                         <a href="{{ route('employees.show', $employee->emp_no) }}"
@@ -139,7 +139,7 @@
                                         </span>
                                     </small>
                                 </td>
-                                <td style="cursor: pointer;"
+                                <td class="col-department" style="cursor: pointer;"
                                     onclick="window.location='{{ route('employees.show', $employee->emp_no) }}'">
                                     @if ($employee->current_dept_name)
                                         <span class="badge bg-department">
@@ -153,7 +153,7 @@
                                         <span class="badge bg-secondary">N/A</span>
                                     @endif
                                 </td>
-                                <td style="cursor: pointer;"
+                                <td class="col-title" style="cursor: pointer;"
                                     onclick="window.location='{{ route('employees.show', $employee->emp_no) }}'">
                                     @if ($employee->current_title)
                                         <span class="fw-medium text-dark">{{ $employee->current_title }}</span>
@@ -164,7 +164,7 @@
                                     @endif
                                 </td>
                                 @if ($canSeeSalaries)
-                                    <td style="cursor: pointer;"
+                                    <td class="col-salary" style="cursor: pointer;"
                                         onclick="window.location='{{ route('employees.show', $employee->emp_no) }}'">
                                         @if ($employee->currentSalary)
                                             <span class="badge bg-salary">
