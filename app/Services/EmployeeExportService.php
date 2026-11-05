@@ -119,9 +119,10 @@ class EmployeeExportService
 
             return $pdf->download('employees_selected_'.count($ids).'_'.date('Y-m-d_H-i-s').'.pdf');
         } catch (\Exception $e) {
+            // Details go to the log only - the message may contain paths, SQL or data.
             report($e);
 
-            return back()->with('error', __('PDF export failed: :message', ['message' => $e->getMessage()]));
+            return back()->with('error', __('The PDF export failed. Please try again or export fewer employees.'));
         }
     }
 

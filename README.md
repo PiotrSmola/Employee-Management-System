@@ -117,18 +117,40 @@ Details, the exact Gate names and how to apply the manager scope in new code:
 ### Default accounts
 
 Created by `php artisan db:seed --class=UserSeeder` (also part of `php artisan db:seed` and of
-every Docker start). The seeder only creates missing accounts – it never changes an existing
-one or its password.
+every Docker start). The seeder only acts on a fresh installation and never changes or
+re-creates accounts:
+
+- the **initial administrator** is created only while no administrator account exists at all
+  (a renamed or deleted admin is not brought back);
+- the **demo accounts** are created only when `APP_ENV=local`, `SEED_DEMO_USERS=true` and the
+  users table was empty – deleted demo accounts do not come back.
 
 | E-mail | Password | Role |
 |--------|----------|------|
-| `ADMIN_EMAIL` (default `admin@example.com`) | `ADMIN_PASSWORD` (default `password`) | Admin |
-| `hr@example.com` | `password` | HR |
-| `manager@example.com` | `password` | Manager of department `d005` (Development) |
-| `viewer@example.com` | `password` | Viewer |
+| `ADMIN_EMAIL` (default `admin@example.com`) | `ADMIN_PASSWORD`; if empty: `password` when `APP_ENV=local`, otherwise a random password printed once to the console / container log (`docker compose logs app`) | Admin |
+| `hr@example.com` (local only) | `password` | HR |
+| `manager@example.com` (local only) | `password` | Manager of department `d005` (Development) |
+| `viewer@example.com` (local only) | `password` | Viewer |
 
-> **Change these passwords** (or delete the demo accounts) right after the first sign-in,
-> and set `SEED_DEMO_USERS=false` on any installation that is not a demo.
+> **Change these passwords** (or delete the demo accounts) right after the first sign-in.
+
+### Production settings
+
+The Docker stack is a local development setup (`APP_ENV=local`, `APP_DEBUG=true`, demo
+accounts). For anything reachable by other people set, e.g. in `.env.docker`:
+
+```env
+APP_ENV=production
+APP_DEBUG=false
+ADMIN_EMAIL=you@your-company.com
+ADMIN_PASSWORD=<a long, unique password>   # or leave empty and read the generated one from the log
+SEED_DEMO_USERS=false
+```
+
+Behind a reverse proxy / load balancer configure the trusted proxies
+(`$middleware->trustProxies(at: [...])` in `bootstrap/app.php`), otherwise every request appears
+to come from the proxy's IP address – the login rate limits are per e-mail + IP and per IP, so all
+users would share one limit.
 
 ### Creating users
 

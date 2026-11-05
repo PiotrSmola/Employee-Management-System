@@ -11,9 +11,9 @@ services:
       - "${APP_PORT:-8000}:80"
     environment:
       APP_NAME: "Employee Management System"
-      APP_ENV: local
+      APP_ENV: ${APP_ENV:-local}
       APP_KEY: ${APP_KEY:-}
-      APP_DEBUG: "true"
+      APP_DEBUG: "${APP_DEBUG:-true}"
       APP_URL: http://localhost:${APP_PORT:-8000}
       LOG_CHANNEL: stderr
       LOG_LEVEL: debug
@@ -26,9 +26,10 @@ services:
       SESSION_DRIVER: file
       CACHE_DRIVER: file
       QUEUE_CONNECTION: sync
-      # Initial accounts created by the UserSeeder on start (only if missing) - change the passwords!
+      # Initial accounts (UserSeeder, fresh installs only). Empty ADMIN_PASSWORD: "password" when
+      # APP_ENV=local, otherwise a random one printed once to the log. See README "Production settings".
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-password}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       SEED_DEMO_USERS: ${SEED_DEMO_USERS:-true}
     depends_on:
       db:
