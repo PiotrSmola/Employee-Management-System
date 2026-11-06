@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Livewire\Concerns\ReadsInitialDepartment;
 use App\Queries\EmployeeFilters;
 use App\Queries\EmployeeSearchQuery;
 use App\Support\Ability;
@@ -13,6 +14,7 @@ use Livewire\WithPagination;
 
 class EmployeeList extends Component
 {
+    use ReadsInitialDepartment;
     use WithPagination;
 
     public const PER_PAGE = 20;
@@ -65,6 +67,7 @@ class EmployeeList extends Component
         $this->selectAll = true;
         $this->selectedEmployees = [];
         $this->excludedEmployees = [];
+        $this->department = $this->initialDepartment();
     }
 
     /**

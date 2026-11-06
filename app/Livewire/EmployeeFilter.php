@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Livewire\Concerns\ReadsInitialDepartment;
 use App\Models\Department;
 use App\Support\EmployeeDataCache;
 use App\Support\EmployeeVisibility;
@@ -12,6 +13,8 @@ use Livewire\Component;
 
 class EmployeeFilter extends Component
 {
+    use ReadsInitialDepartment;
+
     private const DEPARTMENT_TITLES_TTL = 1800;
 
     public $search = '';
@@ -37,7 +40,8 @@ class EmployeeFilter extends Component
         $this->search = $search;
         $this->employmentStatus = $employmentStatus;
         $this->gender = $gender;
-        $this->department = $department;
+        $this->department = $department !== 'all' ? $department : $this->initialDepartment();
+        $this->showFilters = $this->department !== 'all';
         $this->salaryMin = $salaryMin;
         $this->salaryMax = $salaryMax;
         $this->jobTitle = $jobTitle;
