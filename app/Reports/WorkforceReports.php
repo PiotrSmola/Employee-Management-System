@@ -435,7 +435,7 @@ class WorkforceReports
                 $result[$deptNo][$year][$kind] += $n;
             };
 
-            $rows = DB::table('dept_emp as de')
+            $rows = ReportSources::deptEmp('de')
                 ->select('de.dept_no')
                 ->selectRaw('YEAR(de.from_date) AS start_year')
                 ->selectRaw('CASE WHEN de.to_date <= ? THEN YEAR(de.to_date) END AS end_year', [$date])
@@ -481,7 +481,7 @@ class WorkforceReports
         $date = $context->date();
         $spans = $this->firstAndLastRows($context)->havingRaw('COUNT(*) > 1');
 
-        return DB::table('dept_emp as de')
+        return ReportSources::deptEmp('de')
             ->joinSub($spans, 'f', 'f.emp_no', '=', 'de.emp_no')
             ->select('de.dept_no')
             ->selectRaw('CASE WHEN de.from_date <= ? AND '.self::ROW_KEY.' <> f.first_row THEN YEAR(de.from_date) END AS in_year', [$date])
@@ -504,7 +504,7 @@ class WorkforceReports
 
         $query = $context->department === null
             ? DB::table('employees as e')
-            : DB::table('dept_emp as de')
+            : ReportSources::deptEmp('de')
                 ->join('employees as e', 'e.emp_no', '=', 'de.emp_no')
                 ->leftJoinSub($this->firstAndLastRows($context)->havingRaw('COUNT(*) > 1'), 'f', 'f.emp_no', '=', 'de.emp_no')
                 ->where('de.dept_no', $context->department)
@@ -524,11 +524,11 @@ class WorkforceReports
      */
     private function firstAndLastRows(ReportContext $context): Builder
     {
-        $spans = DB::table('dept_emp as de')
+        $spans = ReportSources::deptEmp('de')
             ->select('de.emp_no')
             ->selectRaw('MIN('.self::ROW_KEY.') AS first_row, MAX(de.to_date) AS last_to')
-            ->when($context->department !== null, fn ($q) => $q->whereIn('de.emp_no', fn ($in) => $in
-                ->select('de_d.emp_no')->from('dept_emp as de_d')->where('de_d.dept_no', $context->department)))
+            ->when($context->department !== null, fn ($q) => $q->whereIn('de.emp_no', ReportSources::deptEmp('de_d')
+                ->select('de_d.emp_no')->where('de_d.dept_no', $context->department)))
             ->groupBy('de.emp_no');
 
         return $context->constrain($spans, 'de.emp_no');
@@ -548,12 +548,10 @@ class WorkforceReports
         return $this->cache->remember('snapshot', $context, function () use ($context) {
             $date = $context->date();
 
-            $query = DB::table('dept_emp as de')
+            $query = ReportSources::open(ReportSources::deptEmp('de'), 'de', $date)
                 ->join('employees as e', 'e.emp_no', '=', 'de.emp_no')
                 ->selectRaw('de.dept_no, e.gender, FLOOR(TIMESTAMPDIFF(YEAR, e.birth_date, ?) / 5) * 5 AS age_band', [$date])
                 ->selectRaw('COUNT(*) AS n, SUM(DATEDIFF(?, e.hire_date)) AS tenure_days', [$date])
-                ->where('de.from_date', '<=', $date)
-                ->where('de.to_date', '>', $date)
                 ->when($context->department !== null, fn ($q) => $q->where('de.dept_no', $context->department))
                 ->groupBy('de.dept_no', 'e.gender', 'age_band');
             $context->constrain($query, 'de.emp_no');
@@ -582,17 +580,15 @@ class WorkforceReports
         return $this->cache->remember('title_gender', $context, function () use ($context) {
             $date = $context->date();
 
-            $query = DB::table('titles as t')
+            $query = ReportSources::open(ReportSources::titles('t'), 't', $date)
                 ->join('employees as e', 'e.emp_no', '=', 't.emp_no')
                 ->selectRaw('t.title, e.gender, COUNT(*) AS n')
-                ->where('t.from_date', '<=', $date)
-                ->where('t.to_date', '>', $date)
-                ->when($context->department !== null, fn ($q) => $q->whereExists(fn ($de) => $de
-                    ->selectRaw('1')->from('dept_emp as de')
-                    ->whereColumn('de.emp_no', 't.emp_no')
-                    ->where('de.dept_no', $context->department)
-                    ->where('de.from_date', '<=', $date)
-                    ->where('de.to_date', '>', $date)))
+                ->when($context->department !== null, fn ($q) => $q->whereExists(
+                    ReportSources::open(ReportSources::deptEmp('de'), 'de', $date)
+                        ->selectRaw('1')
+                        ->whereColumn('de.emp_no', 't.emp_no')
+                        ->where('de.dept_no', $context->department)
+                ))
                 ->groupBy('t.title', 'e.gender');
             $context->constrain($query, 't.emp_no');
 

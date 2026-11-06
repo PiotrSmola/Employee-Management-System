@@ -3,7 +3,6 @@
 namespace App\Reports;
 
 use Illuminate\Database\Query\Builder;
-use Illuminate\Support\Facades\DB;
 
 /**
  * Compensation reports (`view-salaries` only): salary statistics per department
@@ -343,16 +342,10 @@ class CompensationReports
     {
         $date = $context->date();
 
-        $query = DB::table('salaries as s')
-            ->join('dept_emp as de', fn ($j) => $j->on('de.emp_no', '=', 's.emp_no')
-                ->where('de.from_date', '<=', $date)
-                ->where('de.to_date', '>', $date))
-            ->leftJoin('titles as t', fn ($j) => $j->on('t.emp_no', '=', 's.emp_no')
-                ->where('t.from_date', '<=', $date)
-                ->where('t.to_date', '>', $date))
-            ->join('employees as e', 'e.emp_no', '=', 's.emp_no')
-            ->where('s.from_date', '<=', $date)
-            ->where('s.to_date', '>', $date)
+        $query = ReportSources::open(ReportSources::salaries('s'), 's', $date);
+        ReportSources::joinDeptEmp($query, 'de', fn ($j) => ReportSources::open($j->on('de.emp_no', '=', 's.emp_no'), 'de', $date));
+        ReportSources::joinTitles($query, 't', fn ($j) => ReportSources::open($j->on('t.emp_no', '=', 's.emp_no'), 't', $date), 'left');
+        $query->join('employees as e', 'e.emp_no', '=', 's.emp_no')
             ->when($context->department !== null, fn ($q) => $q->where('de.dept_no', $context->department));
 
         return $context->constrain($query, 's.emp_no');
@@ -458,15 +451,14 @@ class CompensationReports
             if ($context->department === null) {
                 $start = 's.from_date';
                 $end = 's.to_date';
-                $query = DB::table('salaries as s');
+                $query = ReportSources::salaries('s');
             } else {
                 // The part of each salary period spent in the department.
                 $start = 'GREATEST(s.from_date, de.from_date)';
                 $end = 'LEAST(s.to_date, de.to_date)';
-                $query = DB::table('dept_emp as de')
-                    ->join('salaries as s', fn ($j) => $j->on('s.emp_no', '=', 'de.emp_no')
-                        ->whereColumn('s.from_date', '<', 'de.to_date')
-                        ->whereColumn('s.to_date', '>', 'de.from_date'))
+                $query = ReportSources::joinSalaries(ReportSources::deptEmp('de'), 's', fn ($j) => $j->on('s.emp_no', '=', 'de.emp_no')
+                    ->whereColumn('s.from_date', '<', 'de.to_date')
+                    ->whereColumn('s.to_date', '>', 'de.from_date'))
                     ->where('de.dept_no', $context->department);
             }
 

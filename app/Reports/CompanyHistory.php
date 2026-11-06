@@ -17,9 +17,9 @@ final class CompanyHistory
     {
         $dates = [
             DB::table('employees')->where('hire_date', '<=', $date)->max('hire_date'),
-            DB::table('dept_emp')->where('to_date', '<=', $date)->max('to_date'),
-            DB::table('titles')->where('to_date', '<=', $date)->max('to_date'),
-            DB::table('salaries')->where('to_date', '<=', $date)->max('to_date'),
+            ReportSources::deptEmp('de')->where('de.to_date', '<=', $date)->max('de.to_date'),
+            ReportSources::titles('t')->where('t.to_date', '<=', $date)->max('t.to_date'),
+            ReportSources::salaries('s')->where('s.to_date', '<=', $date)->max('s.to_date'),
         ];
 
         $years = array_map(fn ($d) => (int) substr((string) $d, 0, 4), array_filter($dates));

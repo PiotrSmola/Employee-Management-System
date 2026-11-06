@@ -15,6 +15,7 @@ use App\Support\EmployeeVisibility;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Testing\TestResponse;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -197,6 +198,21 @@ class ReportPagesTest extends TestCase
         $this->assertSame("reports:{$version}:snapshot:all:current", ReportCache::key('snapshot', ReportContext::make($admin)));
         $this->assertSame("reports:{$version}:snapshot:dept-d001:1995-12-31", ReportCache::key('snapshot', ReportContext::make($admin, 'd001', CarbonImmutable::parse('1995-12-31'))));
         $this->assertSame("reports:{$version}:snapshot:mgr-d001:current", ReportCache::key('snapshot', ReportContext::make($manager, 'd002')));
+    }
+
+    public function test_history_tables_are_only_reached_through_report_sources(): void
+    {
+        foreach (File::allFiles(app_path('Reports')) as $file) {
+            if ($file->getFilename() === 'ReportSources.php') {
+                continue;
+            }
+
+            $this->assertDoesNotMatchRegularExpression(
+                "/(table|join|leftJoin|from)\\(\\s*'(dept_emp|titles|salaries)\\b/",
+                $file->getContents(),
+                $file->getPathname(),
+            );
+        }
     }
 
     public function test_navbar_and_dashboard_link_to_the_reports(): void
