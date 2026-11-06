@@ -17,8 +17,8 @@ The dataset marks current rows with `to_date = 9999-01-01`, and a period ends on
 next one starts. Every operation keeps that shape:
 
 - a change closes the current row (`to_date` = effective date) and inserts a new one
-  (`from_date` = effective date, `to_date` = 9999-01-01); history rows are only removed by
-  **Undo last change** (below);
+  (`from_date` = effective date, `to_date` = 9999-01-01); the only rows ever removed are the
+  ones **Undo last change** (below) takes back, and nothing deletes an employee;
 - every operation runs in one transaction that first locks the employee row
   (`SELECT ... FOR UPDATE`), so two people acting on the same employee are serialized and
   the date checks see the committed state; the audit entry is written in the same transaction;
@@ -89,12 +89,13 @@ controller authorizes `EmployeePolicy::create/update` again.
 - **Double hires.** The hire form has a one-time token: a second submit of the same form
   (double click, reload) does not hire again but leads to the employee hired with it. An
   existing employee with the same first name, last name and birth date is reported and needs
-  the explicit confirmation *This is a different person - hire anyway*.
+  the explicit confirmation *This is a different person - hire anyway*; the check reads the index
+  `(birth_date, last_name, first_name)` of `employees`.
 - **Corrections** fix typos in the amount of the most recent salary row and the wording of the
   most recent title row of a **current** employee (the history of former employees is closed;
   rehire them or undo instead). Dates are not changed; a reason is required and logged.
-- **Undo last change.** The most recent HR operation on an employee can be reversed exactly,
-  within 24 hours and only while nothing else changed that employee's records:
+- **Undo last change.** The most recent HR operation on an employee - except a hire - can be
+  reversed exactly, within 24 hours and only while nothing else changed that employee's records:
   - the audit entry of every operation keeps its row changes (closed rows, inserted rows,
     changed values) and a fingerprint of all of the employee's rows afterwards
     (`changes._undo`, not shown in the UI);
@@ -106,8 +107,10 @@ controller authorizes `EmployeePolicy::create/update` again.
   - it is logged as `employee.change_undone` with `undone_entry_id` / `undone_action`;
     the original entry stays. Only one level: the undo entry is now the latest one, and it
     cannot be undone itself, so neither the undo nor the operation before it can be reversed;
-  - undoing a hire deletes the employee and the rows created with it (for hires made by
-    mistake); entries written before this feature (without `_undo`) cannot be undone.
+  - **a hire cannot be undone** (its entry has no `_undo`, the service refuses it and the profile
+    offers no undo right after a hire): a wrongly entered person is handled by editing the
+    personal data or by terminating the employment. Entries written without `_undo` cannot be
+    undone either.
 - **Employee numbers** are the next free number: `EmployeeNumberAllocator::next()` reads the
   highest number with a locking read (`ORDER BY emp_no DESC LIMIT 1 FOR UPDATE`, a next-key lock
   that makes concurrent hires wait - the same approach as the data import), tested with two
@@ -124,6 +127,8 @@ controller authorizes `EmployeePolicy::create/update` again.
   keeps an `emp_no`-leading index (the primary key), the one on `dept_no` its `dept_no` index.
   `down()` restores `(emp_no, dept_no)` only when no employee has two periods in one
   department and otherwise keeps the new key (with a message).
+- `employees`: index `(birth_date, last_name, first_name)` for the duplicate check of the hire
+  form (migration `add_duplicate_check_index_to_employees`, idempotent, built online).
 - `activity_log`: virtual generated column `action_group` (`employee` for `employee.hired`)
   with the index `(action_group, created_at)`, and the index `(user_id, created_at)`
   (migration `add_filter_indexes_to_activity_log`).
@@ -146,7 +151,8 @@ employee.change_undone  {"undone_entry_id": 123, "undone_action": "employee.tran
 ```
 
 Optional keys (`ended_management`, `reason`, `requested_percent`, ...) are left out when empty.
-Every operation's entry also has `_undo` (`ops`: the row changes, `state`: the fingerprint).
+Every operation's entry except `employee.hired` and `employee.change_undone` also has `_undo`
+(`ops`: the row changes, `state`: the fingerprint).
 
 ## Audit log screen (`/audit-log`)
 

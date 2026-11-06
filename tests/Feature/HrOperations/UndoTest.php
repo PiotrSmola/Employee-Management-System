@@ -115,7 +115,7 @@ class UndoTest extends HrOperationsTestCase
         $this->assertSame($before, $this->records($employee->emp_no));
     }
 
-    public function test_undoing_a_hire_removes_the_employee(): void
+    public function test_a_hire_cannot_be_undone(): void
     {
         $department = Department::factory()->create();
         $this->post(route('employees.store'), [
@@ -123,16 +123,49 @@ class UndoTest extends HrOperationsTestCase
             'dept_no' => $department->dept_no, 'title' => 'Staff', 'salary' => '40000', 'form_token' => (string) Str::uuid(),
         ])->assertSessionHasNoErrors();
         $employee = Employee::sole();
+        $entry = ActivityLog::where('action', 'employee.hired')->sole();
+        $records = $this->records($employee->emp_no);
 
-        $this->get($this->profile($employee))->assertSee('Undoing a hire removes the employee record.');
-        $this->undo($employee)
-            ->assertRedirect(route('employees.index'))
-            ->assertSessionHas('status', 'The hire of Double Click has been undone; the employee record was removed.');
+        $this->assertArrayNotHasKey('_undo', $entry->changes);
+        $this->get($this->profile($employee))->assertOk()->assertDontSee('Undo last change')->assertDontSee('id="undoModal"', false);
 
-        $this->assertDatabaseCount('employees', 0);
-        $this->assertDatabaseCount('dept_emp', 0);
-        $this->assertDatabaseCount('salaries', 0);
-        $this->assertSame((string) $employee->emp_no, $this->onlyEntry('employee.change_undone')->subject_id);
+        $this->undo($employee, $entry->id)->assertSessionHasErrorsIn('undo', [
+            'undo' => 'A hire cannot be undone. Correct the personal data, or terminate the employment.',
+        ]);
+
+        $this->assertSame($records, $this->records($employee->emp_no));
+        $this->assertSame(0, ActivityLog::where('action', 'employee.change_undone')->count());
+    }
+
+    public function test_a_hire_is_refused_even_with_forged_undo_data(): void
+    {
+        $employee = $this->currentEmployee();
+        ActivityLog::create([
+            'action' => 'employee.hired', 'subject_type' => 'employee', 'subject_id' => (string) $employee->emp_no,
+            'changes' => ['_undo' => ['ops' => [['insert', 'salaries', ['emp_no' => $employee->emp_no, 'from_date' => self::CURRENT_SALARY_FROM]]], 'state' => 'x']],
+            'created_at' => now(),
+        ]);
+
+        $this->undo($employee)->assertSessionHasErrorsIn('undo', ['undo']);
+
+        $this->assertSame(1, Employee::whereKey($employee->emp_no)->count());
+        $this->assertNotNull($this->current('salaries', $employee->emp_no));
+    }
+
+    public function test_the_operation_after_a_hire_can_be_undone(): void
+    {
+        $department = Department::factory()->create();
+        $this->post(route('employees.store'), [
+            'first_name' => 'Double', 'last_name' => 'Click', 'gender' => 'M', 'birth_date' => '1990-01-01', 'hire_date' => '2024-01-01',
+            'dept_no' => $department->dept_no, 'title' => 'Staff', 'salary' => '40000', 'form_token' => (string) Str::uuid(),
+        ])->assertSessionHasNoErrors();
+        $employee = Employee::sole();
+        $this->post(route('employees.salary', $employee->emp_no), ['mode' => 'amount', 'salary' => '41000', 'effective_date' => '2024-06-01'])->assertSessionHasNoErrors();
+
+        $this->undo($employee)->assertSessionHasNoErrors();
+
+        $this->assertSame(40000, $this->current('salaries', $employee->emp_no)->salary);
+        $this->assertSame(1, Employee::count());
     }
 
     public function test_only_the_most_recent_change_can_be_undone(): void

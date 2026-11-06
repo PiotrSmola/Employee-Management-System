@@ -61,16 +61,15 @@ class EmployeeOperationsService
         'change' => 'employee.title_changed',
     ];
 
-    /** Actions undoLastChange() can reverse. */
+    /** Actions undoLastChange() can reverse. A hire is not one of them: nothing deletes an employee. */
     public const UNDOABLE_ACTIONS = [
-        'employee.hired', 'employee.updated', 'employee.transferred', 'employee.promoted',
-        'employee.demoted', 'employee.title_changed', 'employee.salary_changed', 'employee.terminated',
+        'employee.updated', 'employee.transferred', 'employee.promoted', 'employee.demoted',
+        'employee.title_changed', 'employee.salary_changed', 'employee.terminated',
         'employee.rehired', 'employee.salary_corrected', 'employee.title_corrected',
     ];
 
-    /** Primary key columns of the tables an operation writes. */
+    /** Primary key columns of the history tables. */
     private const KEYS = [
-        'employees' => ['emp_no'],
         'dept_emp' => ['emp_no', 'dept_no', 'from_date'],
         'dept_manager' => ['emp_no', 'dept_no', 'from_date'],
         'titles' => ['emp_no', 'title', 'from_date'],
@@ -108,7 +107,6 @@ class EmployeeOperationsService
                 $this->assertNoDuplicate($first, $last, $data['birth_date']);
             }
 
-            $this->ops = [];
             $employee = Employee::create([
                 'emp_no' => $this->numbers->next(),
                 'first_name' => $first,
@@ -117,11 +115,12 @@ class EmployeeOperationsService
                 'birth_date' => $data['birth_date'],
                 'hire_date' => $data['hire_date'],
             ]);
-            $this->ops[] = ['insert', 'employees', ['emp_no' => $employee->emp_no]];
 
             $this->openEmployment($employee->emp_no, $data['dept_no'], $title, $salary, $data['hire_date']);
+            $this->ops = [];
 
-            $this->log('employee.hired', $employee->emp_no, [
+            // No undo data: a hire is corrected by editing the personal data or terminating.
+            AuditLogger::log('employee.hired', ActivityLog::SUBJECT_EMPLOYEE, $employee->emp_no, [
                 'after' => AuditLogger::values([
                     ...$employee->only(self::PERSONAL_FIELDS),
                     'dept_no' => $data['dept_no'],
@@ -599,14 +598,15 @@ class EmployeeOperationsService
      * the user saw): only within UNDO_HOURS and only if nothing changed the
      * employee's records since. Closed rows are re-opened, rows the operation
      * added are deleted, corrected values restored. Logged as employee.change_undone.
+     * A hire cannot be undone.
      *
-     * @return array{action: string, employee_deleted: bool}
+     * @return string the action that was undone
      *
      * @throws ValidationException
      */
-    public function undoLastChange(Employee $employee, int $entryId): array
+    public function undoLastChange(Employee $employee, int $entryId): string
     {
-        [$result, $departments] = DB::transaction(function () use ($employee, $entryId) {
+        [$action, $departments] = DB::transaction(function () use ($employee, $entryId) {
             $employee = $this->lock($employee);
             $empNo = $employee->emp_no;
 
@@ -630,7 +630,6 @@ class EmployeeOperationsService
                 $this->reverse($change);
             }
 
-            $deleted = ! DB::table('employees')->where('emp_no', $empNo)->exists();
             AuditLogger::log('employee.change_undone', ActivityLog::SUBJECT_EMPLOYEE, $empNo, [
                 'undone_entry_id' => $entry->id,
                 'undone_action' => $entry->action,
@@ -639,12 +638,12 @@ class EmployeeOperationsService
                 'after' => $entry->changes['before'] ?? null,
             ]);
 
-            return [['action' => $entry->action, 'employee_deleted' => $deleted], $departments];
+            return [$entry->action, $departments];
         });
 
         $this->flushCache(array_values(array_unique($departments)));
 
-        return $result;
+        return $action;
     }
 
     /**
@@ -843,10 +842,8 @@ class EmployeeOperationsService
     {
         $state = ['employees' => (array) DB::table('employees')->where('emp_no', $empNo)->first()];
         foreach (self::KEYS as $table => $columns) {
-            if ($table !== 'employees') {
-                $state[$table] = DB::table($table)->where('emp_no', $empNo)->orderBy('from_date')->orderBy($columns[1])
-                    ->get()->map(fn ($row) => array_map('strval', (array) $row))->all();
-            }
+            $state[$table] = DB::table($table)->where('emp_no', $empNo)->orderBy('from_date')->orderBy($columns[1])
+                ->get()->map(fn ($row) => array_map('strval', (array) $row))->all();
         }
 
         return sha1(json_encode($state));
@@ -863,6 +860,8 @@ class EmployeeOperationsService
     private function undoBlockedReason(ActivityLog $entry, int $empNo): ?string
     {
         return match (true) {
+            $entry->action === 'employee.hired'
+                => __('A hire cannot be undone. Correct the personal data, or terminate the employment.'),
             ! in_array($entry->action, self::UNDOABLE_ACTIONS, true) || ! isset($entry->changes['_undo']['ops'], $entry->changes['_undo']['state']) => __('The last change cannot be undone.'),
             $entry->created_at->lt(now()->subHours(self::UNDO_HOURS)) => __('Changes can only be undone within :hours hours.', ['hours' => self::UNDO_HOURS]),
             ! hash_equals($entry->changes['_undo']['state'], $this->stateHash($empNo)) => __('The records of this employee were changed after the last change, so it cannot be undone any more.'),

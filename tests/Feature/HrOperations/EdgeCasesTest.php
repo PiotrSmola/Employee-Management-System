@@ -10,8 +10,12 @@ use App\Models\Salary;
 use App\Models\Title;
 use App\Services\AuditLogger;
 use App\Services\EmployeeOperationsService;
+use App\Support\EmployeeDataCache;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use RuntimeException;
 
 /**
  * Old data with quirks, double submits, unusual amounts and escaping.
@@ -218,6 +222,64 @@ class EdgeCasesTest extends HrOperationsTestCase
         Title::where('emp_no', $other->emp_no)->delete();
         $this->post(route('employees.title', $other->emp_no), ['title' => 'Engineer', 'kind' => 'change', 'effective_date' => '1990-01-01'])
             ->assertSessionHasErrorsIn('title', ['effective_date']);
+    }
+
+    public function test_a_failing_cache_does_not_fail_the_committed_operation(): void
+    {
+        $employee = $this->currentEmployee(salary: 60000);
+        Log::spy();
+        Cache::shouldReceive('forget')->andThrow(new RuntimeException('cache down'));
+
+        $result = app(EmployeeOperationsService::class)->changeSalary($employee, 61000, null, '2024-01-01');
+
+        $this->assertSame(['before' => 60000, 'after' => 61000], $result);
+        $this->assertSame(61000, $this->current('salaries', $employee->emp_no)->salary);
+        $this->assertSame(1, ActivityLog::where('action', 'employee.salary_changed')->count());
+        Log::shouldHaveReceived('warning')->once();
+    }
+
+    public function test_the_cache_is_flushed_only_after_the_surrounding_transaction_commits(): void
+    {
+        $department = Department::factory()->create();
+        $employee = $this->currentEmployee($department, salary: 60000);
+        $this->primeCache([$department->dept_no]);
+
+        DB::transaction(function () use ($employee, $department) {
+            app(EmployeeOperationsService::class)->changeSalary($employee, 61000, null, '2024-01-01');
+            $this->assertTrue(Cache::has(EmployeeDataCache::departmentStats($department->dept_no)), 'Not before the commit.');
+        });
+
+        $this->assertCacheFlushed([$department->dept_no]);
+    }
+
+    public function test_the_job_title_list_is_cached_until_the_next_flush(): void
+    {
+        $employee = $this->currentEmployee(title: 'Engineer');
+        $operations = app(EmployeeOperationsService::class);
+
+        $this->assertSame(['Engineer'], $operations->titleOptions());
+
+        // Written past the service: the cached list does not notice.
+        Title::create(['emp_no' => $employee->emp_no, 'title' => 'Archivist', 'from_date' => '1996-01-01', 'to_date' => '1997-01-01']);
+        $this->assertSame(['Engineer'], $operations->titleOptions());
+        $this->assertSame(['Engineer'], Cache::get(EmployeeDataCache::JOB_TITLES));
+
+        $operations->changeTitle($employee, 'Director', '2024-01-01', 'promotion');
+
+        $this->assertFalse(Cache::has(EmployeeDataCache::JOB_TITLES));
+        $this->assertSame(['Archivist', 'Director', 'Engineer'], $operations->titleOptions());
+    }
+
+    public function test_the_duplicate_check_uses_its_index(): void
+    {
+        Employee::factory()->count(3)->create();
+
+        $plan = collect(DB::select(
+            'EXPLAIN SELECT emp_no FROM employees WHERE first_name = ? AND last_name = ? AND birth_date = ?',
+            ['Maria', 'Curie', '1990-04-12'],
+        ))->first();
+
+        $this->assertStringContainsString('employees_birth_date_last_name_first_name_index', (string) $plan->possible_keys);
     }
 
     public function test_names_and_audit_payloads_are_escaped(): void

@@ -213,15 +213,11 @@ class EmployeeOperationsController extends Controller
     {
         $employee = $this->employee($emp_no);
 
-        $result = $this->run('undo', $this->profileUrl($employee), fn () => $this->operations->undoLastChange($employee, (int) $request->validated('entry_id')));
-
-        if ($result['employee_deleted']) {
-            return redirect()->route('employees.index')->with('status', __('The hire of :name has been undone; the employee record was removed.', ['name' => $this->name($employee)]));
-        }
+        $action = $this->run('undo', $this->profileUrl($employee), fn () => $this->operations->undoLastChange($employee, (int) $request->validated('entry_id')));
 
         return $this->backToProfile($employee, __('The last change of :name (:action) has been undone.', [
             'name' => $this->name($employee),
-            'action' => mb_strtolower(AuditLogPresenter::actionLabel($result['action'])),
+            'action' => mb_strtolower(AuditLogPresenter::actionLabel($action)),
         ]));
     }
 

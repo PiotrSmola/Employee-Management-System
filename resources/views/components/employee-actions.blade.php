@@ -501,9 +501,6 @@
                     @include('audit-log.partials.changes', ['changes' => $undoable->changes, 'presenter' => $undoPresenter])
                     <p class="small text-body-secondary mt-3 mb-0">
                         {{ __('Undoing restores the records exactly as they were before this change: closed records are reopened and the records it added are removed. Only the most recent change can be undone, within :hours hours and only while nothing else was changed for this employee. The undo is recorded in the audit log.', ['hours' => \App\Services\EmployeeOperationsService::UNDO_HOURS]) }}
-                        @if ($undoable->action === 'employee.hired')
-                            <strong class="text-danger">{{ __('Undoing a hire removes the employee record.') }}</strong>
-                        @endif
                     </p>
                 </div>
                 <div class="modal-footer">

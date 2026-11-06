@@ -19,6 +19,8 @@ class HrMigrationsTest extends TestCase
 
     private const AUDIT_INDEXES = '2026_11_06_000002_add_filter_indexes_to_activity_log';
 
+    private const DUPLICATE_INDEX = '2026_11_06_000003_add_duplicate_check_index_to_employees';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -130,5 +132,23 @@ class HrMigrationsTest extends TestCase
         $this->migration(self::AUDIT_INDEXES)->up();
         DB::table('activity_log')->insert(['action' => 'employee.hired', 'subject_type' => 'employee', 'subject_id' => '1', 'created_at' => now()]);
         $this->assertSame('employee', DB::table('activity_log')->value('action_group'));
+    }
+
+    public function test_the_duplicate_check_index_is_added_idempotently(): void
+    {
+        $name = 'employees_birth_date_last_name_first_name_index';
+        $indexes = fn () => array_map(fn ($i) => strtolower($i['name']), Schema::getIndexes('employees'));
+
+        $this->assertContains($name, $indexes());
+
+        $this->migration(self::DUPLICATE_INDEX)->up();
+        $this->assertContains($name, $indexes());
+
+        $this->migration(self::DUPLICATE_INDEX)->down();
+        $this->migration(self::DUPLICATE_INDEX)->down();
+        $this->assertNotContains($name, $indexes());
+
+        $this->migration(self::DUPLICATE_INDEX)->up();
+        $this->assertContains($name, $indexes());
     }
 }
