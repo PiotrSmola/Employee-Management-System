@@ -71,6 +71,8 @@ class EmployeeImportService
 
     private const INSERT_CHUNK = 500;
 
+    private const COMMIT_ATTEMPTS = 5;
+
     private const CACHE_PREFIX = 'employee-import:';
 
     // ------------------------------------------------------------------ analyze
@@ -583,7 +585,9 @@ class EmployeeImportService
         }
 
         try {
-            $result = DB::transaction(fn () => $this->createEmployees($analysis, $staged['file_name'], $user));
+            // Concurrent allocations can deadlock on the gap above the highest number (InnoDB gives
+            // one of them up): the attempts retry that one, with the number allocated anew.
+            $result = DB::transaction(fn () => $this->createEmployees($analysis, $staged['file_name'], $user), self::COMMIT_ATTEMPTS);
         } catch (QueryException $e) {
             // Details go to the log only. The upload stays staged, so the user can try again.
             report($e);
