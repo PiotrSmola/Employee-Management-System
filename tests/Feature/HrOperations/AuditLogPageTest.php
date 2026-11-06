@@ -113,25 +113,28 @@ class AuditLogPageTest extends HrOperationsTestCase
         }
     }
 
-    public function test_entries_are_newest_first_and_paginated_without_counting(): void
+    public function test_entries_are_newest_first_and_paged_by_cursor(): void
     {
         for ($i = 1; $i <= 30; $i++) {
             $this->entry('employee.updated', 'employee', (string) (20000 + $i), ['after' => ['last_name' => sprintf('Marker%02d', $i)]],
-                at: Carbon::parse('2026-01-01 00:00:00')->addMinutes($i)->toDateTimeString());
+                at: Carbon::parse('2026-01-01 00:00:00')->addMinutes(intdiv($i, 2))->toDateTimeString());
         }
 
-        $this->get(route('audit-log.index'))
+        $first = $this->get(route('audit-log.index'))
             ->assertOk()
             ->assertSeeInOrder(['Marker30', 'Marker29'])
             ->assertSee('Marker06')
             ->assertDontSee('Marker05')
-            ->assertSee('page=2');
+            ->assertSee('cursor=');
+        $next = $first->viewData('entries')->nextPageUrl();
+        $this->assertNotNull($next);
 
-        $this->get(route('audit-log.index', ['page' => 2]))
+        $second = $this->get($next)
             ->assertOk()
-            ->assertSee('Marker05')
-            ->assertSee('Marker01')
+            ->assertSeeInOrder(['Marker05', 'Marker01'])
             ->assertDontSee('Marker06');
+        $this->assertNull($second->viewData('entries')->nextPageUrl());
+        $this->assertNotNull($second->viewData('entries')->previousPageUrl());
     }
 
     public function test_filters_survive_paging(): void
@@ -139,9 +142,62 @@ class AuditLogPageTest extends HrOperationsTestCase
         for ($i = 1; $i <= 26; $i++) {
             $this->entry('employee.updated', 'employee', '10001', ['after' => ['last_name' => 'X'.$i]]);
         }
+        $this->entry('employee.hired', 'employee', '10001', ['after' => ['last_name' => 'Other-Action']]);
 
-        $this->get(route('audit-log.index', ['action' => 'employee.updated']))
-            ->assertOk()
-            ->assertSee('action=employee.updated&amp;page=2', false);
+        $next = $this->get(route('audit-log.index', ['action' => 'employee.updated']))->assertOk()->viewData('entries')->nextPageUrl();
+        $this->assertStringContainsString('action=employee.updated', $next);
+        $this->get($next)->assertOk()->assertSee('X1')->assertDontSee('Other-Action');
+    }
+
+    public function test_out_of_range_dates_are_ignored(): void
+    {
+        $this->entry('employee.hired', 'employee', '10001', ['after' => ['first_name' => 'Marker-A']]);
+
+        foreach ([['to' => '9999-12-31'], ['from' => '9999-12-31'], ['from' => '0001-01-01'], ['to' => '10000-01-01']] as $filters) {
+            $this->get(route('audit-log.index', $filters))->assertOk()->assertSee('Marker-A');
+        }
+        $this->get(route('audit-log.index', ['to' => '9999-12-30']))->assertOk()->assertSee('Marker-A');
+    }
+
+    public function test_sign_in_entries_are_only_shown_to_administrators(): void
+    {
+        $this->entry('auth.login_failed', 'user', null, ['email' => 'secret-guess@example.com', 'reason' => 'invalid_credentials']);
+        $this->entry('user.created', 'user', '5', ['after' => ['name' => 'Visible-User']]);
+
+        $this->get(route('audit-log.index'))->assertSee('secret-guess@example.com')->assertSee('auth.login_failed');
+
+        $this->signInAs(Role::Hr);
+        foreach ([[], ['action' => 'auth.*'], ['action' => 'auth.login_failed'], ['user' => 'none'], ['subject_type' => 'user']] as $filters) {
+            $this->get(route('audit-log.index', $filters))
+                ->assertOk()
+                ->assertDontSee('secret-guess@example.com')
+                ->assertDontSee('auth.login_failed');
+        }
+        $this->get(route('audit-log.index'))->assertSee('Visible-User');
+    }
+
+    public function test_the_group_filter_reads_the_action_group_index_in_order(): void
+    {
+        $this->entry('employee.hired', 'employee', '1');
+
+        $plan = collect(\Illuminate\Support\Facades\DB::select(
+            "EXPLAIN SELECT * FROM activity_log WHERE action_group = 'employee' ORDER BY created_at DESC, id DESC LIMIT 26"
+        ))->first();
+
+        $this->assertStringContainsString('action_group_created_at', (string) $plan->possible_keys);
+        $this->assertStringNotContainsString('filesort', (string) $plan->Extra);
+        $this->assertSame('employee', \Illuminate\Support\Facades\DB::table('activity_log')->value('action_group'));
+    }
+
+    public function test_the_filter_lists_are_cached_briefly(): void
+    {
+        $this->entry('employee.hired', 'employee', '1');
+        $this->get(route('audit-log.index'))->assertSee('employee.hired');
+
+        $this->entry('employee.special_case', 'employee', '1');
+        $this->get(route('audit-log.index'))->assertDontSee('<option value="employee.special_case"', false);
+
+        \Illuminate\Support\Facades\Cache::flush();
+        $this->get(route('audit-log.index'))->assertSee('<option value="employee.special_case"', false);
     }
 }

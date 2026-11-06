@@ -6,11 +6,13 @@ use App\Models\ActivityLog;
 use App\Models\Department;
 use App\Models\Employee;
 use App\Models\User;
+use App\Support\Ability;
 use App\Support\AuditLogPresenter;
 use App\Support\EmployeeVisibility;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\View\View;
 
@@ -19,8 +21,14 @@ use Illuminate\View\View;
  * subject, user and date range.
  *
  * Stays fast on large logs: every filter maps onto an index (`created_at`,
- * `(action, created_at)`, `(subject_type, subject_id, created_at)`, `user_id`)
- * and the page uses simple pagination (no COUNT over the whole log).
+ * `(action, created_at)`, `(action_group, created_at)` for "employee.*",
+ * `(subject_type, subject_id, created_at)`, `(user_id, created_at)`) and the page
+ * uses cursor pagination: no COUNT over the whole log, and no OFFSET - a deep page
+ * starts at the (created_at, id) of the previous one. The lists of actions and
+ * subject types offered in the filters are cached for a few minutes.
+ *
+ * Sign-in entries (`auth.*`: e-mail addresses of failed sign-ins, IP addresses)
+ * are account security data and only shown with `manage-users` (administrators).
  */
 class AuditLogController extends Controller
 {
@@ -29,15 +37,29 @@ class AuditLogController extends Controller
     /** Filter value of `user` for entries without a user (system, failed sign-ins). */
     public const NO_USER = 'none';
 
+    /** Cache lifetime (seconds) of the action / subject type lists of the filters. */
+    public const OPTIONS_TTL = 300;
+
+    /** Action group only shown to administrators. */
+    public const SECURITY_GROUP = 'auth';
+
     public function index(Request $request): View
     {
         $filters = $this->filters($request);
-        $subjectTypes = ActivityLog::query()->distinct()->orderBy('subject_type')->pluck('subject_type')->all();
+        $withSecurity = $request->user()->can(Ability::MANAGE_USERS);
+        $subjectTypes = Cache::remember('audit_log:subject_types', self::OPTIONS_TTL,
+            fn () => ActivityLog::query()->distinct()->orderBy('subject_type')->pluck('subject_type')->all());
+        $actions = Cache::remember('audit_log:actions', self::OPTIONS_TTL,
+            fn () => ActivityLog::query()->distinct()->orderBy('action')->pluck('action')->all());
+        if (! $withSecurity) {
+            $actions = array_values(array_filter($actions, fn (string $action) => ! str_starts_with($action, self::SECURITY_GROUP.'.')));
+        }
 
         $entries = $this->query($filters, $subjectTypes)
+            ->when(! $withSecurity, fn (Builder $query) => $query->where('action_group', '<>', self::SECURITY_GROUP))
             ->with('user:id,name,email')
             ->latestFirst()
-            ->simplePaginate(self::PER_PAGE)
+            ->cursorPaginate(self::PER_PAGE)
             ->withQueryString();
 
         $employeeIds = $entries->getCollection()
@@ -52,7 +74,7 @@ class AuditLogController extends Controller
         return view('audit-log.index', [
             'entries' => $entries,
             'filters' => $filters,
-            'actions' => ActivityLog::query()->distinct()->orderBy('action')->pluck('action')->all(),
+            'actions' => $actions,
             'subjectTypes' => $subjectTypes,
             'users' => User::query()->orderBy('name')->get(['id', 'name', 'email']),
             'employeeNames' => $employeeIds === [] ? collect() : Employee::query()
@@ -81,8 +103,8 @@ class AuditLogController extends Controller
             'subject_type' => ['string', 'max:32'],
             'subject_id' => ['string', 'max:64'],
             'user' => ['string', 'regex:/^(\d+|'.self::NO_USER.')$/'],
-            'from' => ['date_format:Y-m-d'],
-            'to' => ['date_format:Y-m-d'],
+            'from' => ['date_format:Y-m-d', 'after_or_equal:1970-01-01', 'before_or_equal:9999-12-30'],
+            'to' => ['date_format:Y-m-d', 'after_or_equal:1970-01-01', 'before_or_equal:9999-12-30'],
         ])->valid();
 
         return array_intersect_key($valid, array_flip(['action', 'subject_type', 'subject_id', 'user', 'from', 'to']));
@@ -96,9 +118,9 @@ class AuditLogController extends Controller
     {
         return ActivityLog::query()
             ->when($filters['action'] ?? null, function (Builder $query, string $action) {
-                // "employee.*" = every action of a subject (range on the (action, created_at) index).
+                // "employee.*" = every action of a group: (action_group, created_at) index, read in order.
                 str_ends_with($action, '.*')
-                    ? $query->where('action', 'like', str_replace(['%', '_'], ['\%', '\_'], substr($action, 0, -1)).'%')
+                    ? $query->where('action_group', substr($action, 0, -2))
                     : $query->where('action', $action);
             })
             ->when($filters['subject_type'] ?? null, fn (Builder $query, string $type) => $query->where('subject_type', $type))

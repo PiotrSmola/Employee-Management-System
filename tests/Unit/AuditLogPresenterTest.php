@@ -85,4 +85,20 @@ class AuditLogPresenterTest extends TestCase
 
         $this->assertSame(['Title', 'Effective date'], array_column($rows, 'field'));
     }
+
+    public function test_salary_figures_are_left_out_at_any_depth_and_internal_keys_never_shown(): void
+    {
+        $rows = $this->presenter(withSalaries: false)->rows([
+            'after' => ['job' => ['title' => 'Staff', 'salary' => 50000, 'history' => [['salary' => 1, 'from' => '2024-01-01']]]],
+            'details' => ['salary_before' => 1, 'note' => 'kept'],
+            '_undo' => ['ops' => [['insert', 'salaries', ['salary' => 1]]]],
+        ]);
+
+        $this->assertSame([
+            ['field' => 'Job', 'before' => null, 'after' => '{"title":"Staff","history":[{"from":"2024-01-01"}]}', 'change' => true],
+            ['field' => 'Details', 'before' => null, 'after' => '{"note":"kept"}', 'change' => false],
+        ], $rows);
+
+        $this->assertSame([], $this->presenter()->rows(['_undo' => ['state' => 'x']]));
+    }
 }

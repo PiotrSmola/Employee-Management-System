@@ -14,8 +14,10 @@ use Illuminate\Support\Str;
  *   $presenter = new AuditLogPresenter($departmentNames, withSalaries: $canSeeSalaries);
  *   $presenter->rows($entry->changes);   // [['field' => 'Salary', 'before' => '60,000', 'after' => '63,000'], ...]
  *
- * Salary figures (keys containing "salary" or "percent") are left out without
- * `view-salaries`.
+ * Salary figures (keys containing "salary" or "percent", at any depth) are left
+ * out without `view-salaries`. Internal keys (starting with "_", e.g. the undo
+ * data of HR operations) are never shown. Values are returned as plain text;
+ * escaping is left to Blade.
  */
 final class AuditLogPresenter
 {
@@ -33,6 +35,12 @@ final class AuditLogPresenter
         'previous_end_date' => 'Previous employment ended',
         'from_date' => 'Period start',
         'to_date' => 'Period end',
+        'returning' => 'Return to a previous department',
+        'closed_stray_records' => 'Closed stray current records',
+        'confirmed_unusual' => 'Unusual change confirmed',
+        'undone_entry_id' => 'Undone entry',
+        'undone_action' => 'Undone change',
+        'undone_at' => 'Change made at',
     ];
 
     /** Keys whose values are department numbers. */
@@ -127,7 +135,7 @@ final class AuditLogPresenter
         }
 
         foreach ($changes as $key => $value) {
-            if (in_array($key, ['before', 'after'], true) && is_array($value)) {
+            if (in_array($key, ['before', 'after'], true) && (is_array($value) || $value === null)) {
                 continue;
             }
             if ($this->hidden((string) $key)) {
@@ -160,6 +168,8 @@ final class AuditLogPresenter
         }
 
         if (is_array($value)) {
+            $value = $this->strip($value);
+
             return array_is_list($value) && array_filter($value, fn ($item) => ! is_scalar($item) && $item !== null) === []
                 ? implode(', ', array_map(fn ($item) => $this->value($key, $item), $value))
                 : (string) json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -170,6 +180,10 @@ final class AuditLogPresenter
                 fn (string $no) => isset($this->departmentNames[$no]) ? $this->departmentNames[$no].' ('.$no.')' : $no,
                 array_map('trim', explode(',', $value)),
             ));
+        }
+
+        if ($key === 'undone_action' && is_string($value)) {
+            return self::actionLabel($value).' ('.$value.')';
         }
 
         if ($key === 'salary' && is_numeric($value)) {
@@ -193,6 +207,28 @@ final class AuditLogPresenter
 
     private function hidden(string $key): bool
     {
-        return ! $this->withSalaries && (str_contains($key, 'salary') || str_contains($key, 'percent'));
+        return str_starts_with($key, '_')
+            || (! $this->withSalaries && (str_contains($key, 'salary') || str_contains($key, 'percent')));
+    }
+
+    /**
+     * $value without hidden keys, at any depth.
+     *
+     * @param  array<array-key, mixed>  $value
+     * @return array<array-key, mixed>
+     */
+    private function strip(array $value): array
+    {
+        $list = array_is_list($value);
+        $kept = [];
+
+        foreach ($value as $key => $item) {
+            if (is_string($key) && $this->hidden($key)) {
+                continue;
+            }
+            $kept[$key] = is_array($item) ? $this->strip($item) : $item;
+        }
+
+        return $list ? array_values($kept) : $kept;
     }
 }

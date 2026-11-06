@@ -169,7 +169,7 @@
             @if ($entries->hasPages())
                 <div class="card-footer d-flex flex-wrap justify-content-between align-items-center gap-2">
                     <small class="text-muted">
-                        {{ __('Page :page, entries :from-:to', ['page' => $entries->currentPage(), 'from' => $entries->firstItem(), 'to' => $entries->lastItem()]) }}
+                        {{ __(':count entries per page, newest first', ['count' => $entries->perPage()]) }}
                     </small>
                     {{ $entries->links('pagination::simple-bootstrap-5') }}
                 </div>
