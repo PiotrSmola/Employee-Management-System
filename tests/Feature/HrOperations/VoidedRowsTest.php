@@ -7,17 +7,24 @@ use App\Livewire\EmployeeFilter;
 use App\Models\Department;
 use App\Models\Employee;
 use App\Models\User;
+use App\Queries\DepartmentMemberSearch;
+use App\Reports\ReportCatalog;
+use App\Reports\ReportContext;
 use App\Services\DashboardService;
+use App\Services\DepartmentManagementService;
+use App\Services\DepartmentStatistics;
+use App\Services\EmployeeImportService;
 use App\Services\EmployeeOperationsService;
 use App\Services\EmployeeProfileService;
 use App\Support\EmployeeVisibility;
 use Illuminate\Support\Facades\DB;
+use Laravel\Sanctum\Sanctum;
 use Livewire\Livewire;
 
 /**
  * Voided rows (undone HR operations) stay in the tables but do not exist for the
- * application: list, filters, sorts, counts, profile, charts, PDF, CSV, dashboard
- * and the rules of the HR operations.
+ * application: list, filters, sorts, counts, profile, charts, PDF, CSV, dashboard,
+ * departments, reports, API, import and the rules of the HR operations.
  */
 class VoidedRowsTest extends HrOperationsTestCase
 {
@@ -152,7 +159,7 @@ class VoidedRowsTest extends HrOperationsTestCase
     {
         $profile = app(EmployeeProfileService::class)->build(Employee::find($this->current->emp_no));
 
-        $html = view('exports.show-pdf', $profile)->render();
+        $html = view('exports.show-pdf', [...$profile, 'generatedAt' => now()])->render();
 
         $this->assertStringContainsString('Engineer', $html);
         $this->assertStringNotContainsString(self::GHOST_TITLE, $html);
@@ -223,6 +230,105 @@ class VoidedRowsTest extends HrOperationsTestCase
         $this->assertNotContains(self::GHOST_SALARY, $employee->salaries->pluck('salary')->all());
         $this->assertSame(0, $this->ghost->employees()->count());
         $this->assertSame(1, Employee::active()->count());
+    }
+
+    public function test_department_figures_ignore_voided_rows(): void
+    {
+        $statistics = app(DepartmentStatistics::class);
+        $visibility = EmployeeVisibility::unrestricted();
+
+        $overview = $statistics->overview(Department::query()->orderBy('dept_no')->get(), $visibility)['departments']->keyBy('dept_no');
+        $this->assertSame(1, $overview[$this->sales->dept_no]->headcount);
+        $this->assertSame(0, $overview[$this->ghost->dept_no]->headcount);
+        $this->assertEquals(60000, $overview[$this->sales->dept_no]->avg_salary);
+        $this->assertNull($overview[$this->ghost->dept_no]->manager);
+
+        $details = $statistics->details($this->sales, $visibility);
+        $this->assertSame(1, $details['headcount']);
+        $this->assertEquals(60000, $details['salary']['max']);
+        $this->assertSame(['Engineer'], $details['titles']->pluck('title')->all());
+        $this->assertNull(collect($details['recentLeavers'])->firstWhere('moved_to', 'Ghost Department'));
+
+        $ghost = $statistics->details($this->ghost, $visibility);
+        $this->assertSame(0, $ghost['headcount']);
+        $this->assertSame([], $ghost['recentJoiners']->all());
+        $this->assertSame([], $ghost['managerHistory']->all());
+        $this->assertSame([], $ghost['headcountByYear']->all());
+
+        $this->assertSame([], $statistics->forEmployee($this->current)['managedPeriods']->all());
+    }
+
+    public function test_the_manager_rules_ignore_voided_rows(): void
+    {
+        $departments = app(DepartmentManagementService::class);
+        $search = app(DepartmentMemberSearch::class);
+
+        $this->assertSame([], $search->search($this->ghost->dept_no, '')->all());
+        $this->assertSame('Engineer', $search->search($this->sales->dept_no, (string) $this->current->emp_no)->first()->title);
+        $this->assertNull($search->search($this->sales->dept_no, (string) $this->current->emp_no)->first()->manager);
+        $this->assertNull($departments->deletionBlockedReason($this->ghost));
+
+        $this->expectExceptionMessage('The employee is not a current employee of this department.');
+        $departments->assignManager($this->ghost, $this->current->emp_no, '2021-01-01');
+    }
+
+    public function test_reports_ignore_voided_rows(): void
+    {
+        $catalog = app(ReportCatalog::class);
+        $context = ReportContext::make(EmployeeVisibility::unrestricted());
+
+        $this->assertSame(1, $catalog->summary(ReportCatalog::WORKFORCE, $context)['headcount']);
+        $compensation = $catalog->summary(ReportCatalog::COMPENSATION, $context);
+        $this->assertSame(1, $compensation['employees']);
+        $this->assertEquals(60000, $compensation['average']);
+
+        foreach ([ReportCatalog::WORKFORCE, ReportCatalog::COMPENSATION] as $section) {
+            foreach ($catalog->tables($section, $context) as $table) {
+                $content = json_encode($table->csvRows());
+                $this->assertStringNotContainsString(self::GHOST_TITLE, $content, $table->key);
+                $this->assertStringNotContainsString('Ghost Department', $content, $table->key);
+                $this->assertStringNotContainsString((string) self::GHOST_SALARY, $content, $table->key);
+            }
+        }
+
+        $ghost = ReportContext::make(EmployeeVisibility::unrestricted(), $this->ghost->dept_no);
+        $this->assertSame(0, $catalog->summary(ReportCatalog::WORKFORCE, $ghost)['headcount']);
+        $this->assertSame(0, $catalog->summary(ReportCatalog::COMPENSATION, $ghost)['employees']);
+    }
+
+    public function test_the_api_ignores_voided_rows(): void
+    {
+        Sanctum::actingAs($this->user, ['read']);
+
+        $list = $this->getJson(route('api.v1.employees.index', ['sort' => 'emp_no', 'status' => 'current']))->assertOk()->json('data');
+        $this->assertSame([$this->current->emp_no], array_column($list, 'emp_no'));
+        $this->assertSame('Sales', $list[0]['department']);
+        $this->assertSame('Engineer', $list[0]['title']);
+        $this->assertSame(60000, $list[0]['salary']);
+
+        $employee = $this->getJson(route('api.v1.employees.show', $this->former->emp_no))->assertOk()->json('data');
+        $this->assertSame('former', $employee['status']);
+        $this->assertNull($employee['title']);
+        $this->assertNotContains('Ghost Department', array_column($employee['history']['departments'], 'name'));
+        $this->assertNotContains(self::GHOST_TITLE, array_column($employee['history']['titles'], 'title'));
+        $this->assertNotContains(self::GHOST_SALARY, array_column($employee['history']['salaries'], 'salary'));
+
+        $departments = collect($this->getJson(route('api.v1.departments.index'))->assertOk()->json('data'))->pluck('current_employees', 'dept_no');
+        $this->assertSame(1, $departments[$this->sales->dept_no]);
+        $this->assertSame(0, $departments[$this->ghost->dept_no]);
+    }
+
+    public function test_the_import_knows_no_voided_titles(): void
+    {
+        $row = fn (string $title) => [['line' => 2, 'values' => [
+            'first_name' => 'Jane', 'last_name' => 'Doe', 'birth_date' => '1980-01-02', 'gender' => 'F',
+            'hire_date' => '2020-01-01', 'department' => $this->sales->dept_no, 'title' => $title, 'salary' => 50000,
+        ]]];
+        $imports = app(EmployeeImportService::class);
+
+        $this->assertSame([], $imports->validate($row('Engineer'))[0]['errors']);
+        $this->assertNotSame([], $imports->validate($row(self::GHOST_TITLE))[0]['errors']);
+        $this->get(route('employees.import.create'))->assertOk()->assertDontSee(self::GHOST_TITLE);
     }
 
     public function test_the_hr_rules_ignore_voided_rows(): void

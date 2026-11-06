@@ -9,6 +9,7 @@ use App\Support\EmployeeDataCache;
 use App\Support\EmployeeVisibility;
 use App\Support\FigureCache;
 use Illuminate\Database\Query\Builder;
+use App\Support\HistoryRows;
 use Illuminate\Database\Query\JoinClause;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -218,7 +219,7 @@ class DepartmentStatistics
      */
     public function currentManagers(?array $deptNos = null): Collection
     {
-        return DB::table('dept_manager as dm')
+        return HistoryRows::active(DB::table('dept_manager as dm'), 'dm')
             ->join('employees as e', 'e.emp_no', '=', 'dm.emp_no')
             ->where('dm.to_date', self::CURRENT)
             ->when($deptNos !== null, fn (Builder $q) => $q->whereIn('dm.dept_no', $deptNos))
@@ -234,7 +235,7 @@ class DepartmentStatistics
      */
     public function managerHistory(string $deptNo): Collection
     {
-        return DB::table('dept_manager as dm')
+        return HistoryRows::active(DB::table('dept_manager as dm'), 'dm')
             ->join('employees as e', 'e.emp_no', '=', 'dm.emp_no')
             ->where('dm.dept_no', $deptNo)
             ->orderByDesc('dm.from_date')
@@ -263,7 +264,7 @@ class DepartmentStatistics
                 'dept_name' => $department->dept_name,
                 'manager' => $managers[$department->dept_no] ?? null,
             ])->values(),
-            'managedPeriods' => DB::table('dept_manager as dm')
+            'managedPeriods' => HistoryRows::active(DB::table('dept_manager as dm'), 'dm')
                 ->join('departments as d', 'd.dept_no', '=', 'dm.dept_no')
                 ->where('dm.emp_no', $employee->emp_no)
                 ->orderByDesc('dm.from_date')
@@ -323,14 +324,14 @@ class DepartmentStatistics
      */
     private function computeOverview(): array
     {
-        $headcount = DB::table('dept_emp')
+        $headcount = HistoryRows::active(DB::table('dept_emp'))
             ->where('to_date', self::CURRENT)
             ->groupBy('dept_no')
             ->selectRaw('dept_no, count(*) as total')
             ->pluck('total', 'dept_no');
 
         $titles = $this->currentMembers()
-            ->join('titles as t', fn (JoinClause $j) => $j->on('t.emp_no', '=', 'de.emp_no')->where('t.to_date', '=', self::CURRENT))
+            ->join('titles as t', fn (JoinClause $j) => HistoryRows::active($j->on('t.emp_no', '=', 'de.emp_no'), 't')->where('t.to_date', '=', self::CURRENT))
             ->groupBy('de.dept_no')
             ->selectRaw('de.dept_no, count(distinct t.title) as total')
             ->pluck('total', 'dept_no');
@@ -374,7 +375,7 @@ class DepartmentStatistics
             ->first();
 
         $titles = $members()
-            ->join('titles as t', fn (JoinClause $j) => $j->on('t.emp_no', '=', 'de.emp_no')->where('t.to_date', '=', self::CURRENT))
+            ->join('titles as t', fn (JoinClause $j) => HistoryRows::active($j->on('t.emp_no', '=', 'de.emp_no'), 't')->where('t.to_date', '=', self::CURRENT))
             ->groupBy('t.title')
             ->orderByDesc('total')
             ->orderBy('t.title')
@@ -409,7 +410,7 @@ class DepartmentStatistics
      */
     private function headcountByYear(string $deptNo): array
     {
-        $joined = DB::table('dept_emp')
+        $joined = HistoryRows::active(DB::table('dept_emp'))
             ->where('dept_no', $deptNo)
             ->groupByRaw('year(from_date)')
             ->selectRaw('year(from_date) as year, count(*) as total')
@@ -419,16 +420,18 @@ class DepartmentStatistics
             return [];
         }
 
-        $left = DB::table('dept_emp')
+        $left = HistoryRows::active(DB::table('dept_emp'))
             ->where('dept_no', $deptNo)
             ->where('to_date', '<', self::CURRENT)
             ->groupByRaw('year(to_date)')
+        // Latest row by index order: MAX() no longer stops at the first index entry
+        // with the void_log_id condition.
             ->selectRaw('year(to_date) as year, count(*) as total')
             ->pluck('total', 'year');
 
         $lastYear = (int) substr(max(
-            (string) DB::table('dept_emp')->max('from_date'),
-            (string) DB::table('dept_emp')->where('to_date', '<', self::CURRENT)->max('to_date'),
+            (string) HistoryRows::active(DB::table('dept_emp'))->orderByDesc('from_date')->value('from_date'),
+            (string) HistoryRows::active(DB::table('dept_emp'))->where('to_date', '<', self::CURRENT)->orderByDesc('to_date')->value('to_date'),
         ), 0, 4);
 
         $rows = [];
@@ -451,7 +454,7 @@ class DepartmentStatistics
     {
         // Sorted on dept_emp alone: joining employees first would sort every
         // assignment of the department with the names (85k rows for the largest).
-        $rows = DB::table('dept_emp')
+        $rows = HistoryRows::active(DB::table('dept_emp'))
             ->where('dept_no', $deptNo)
             ->orderByDesc('from_date')
             ->orderByDesc('emp_no')
@@ -478,7 +481,7 @@ class DepartmentStatistics
     private function recentLeavers(string $deptNo): array
     {
         // Read from the (dept_no, to_date) index in order, names afterwards.
-        $rows = DB::table('dept_emp')
+        $rows = HistoryRows::active(DB::table('dept_emp'))
             ->where('dept_no', $deptNo)
             ->where('to_date', '<', self::CURRENT)
             ->orderByDesc('to_date')
@@ -488,7 +491,7 @@ class DepartmentStatistics
 
         $people = $this->people($rows);
 
-        $later = DB::table('dept_emp')
+        $later = HistoryRows::active(DB::table('dept_emp'))
             ->whereIn('emp_no', $rows->pluck('emp_no'))
             ->where('dept_no', '<>', $deptNo)
             ->orderBy('from_date')
@@ -526,8 +529,8 @@ class DepartmentStatistics
      */
     private function currentSalaries(?string $deptNo = null): Builder
     {
-        return DB::table('salaries as s')
-            ->join('dept_emp as de', fn (JoinClause $j) => $j->on('de.emp_no', '=', 's.emp_no')->where('de.to_date', '=', self::CURRENT))
+        return HistoryRows::active(DB::table('salaries as s'), 's')
+            ->join('dept_emp as de', fn (JoinClause $j) => HistoryRows::active($j->on('de.emp_no', '=', 's.emp_no'), 'de')->where('de.to_date', '=', self::CURRENT))
             ->where('s.to_date', self::CURRENT)
             ->when($deptNo !== null, fn (Builder $q) => $q->where('de.dept_no', $deptNo));
     }
@@ -537,7 +540,7 @@ class DepartmentStatistics
      */
     private function currentMembers(?string $deptNo = null): Builder
     {
-        return DB::table('dept_emp as de')
+        return HistoryRows::active(DB::table('dept_emp as de'), 'de')
             ->where('de.to_date', self::CURRENT)
             ->when($deptNo !== null, fn (Builder $q) => $q->where('de.dept_no', $deptNo));
     }

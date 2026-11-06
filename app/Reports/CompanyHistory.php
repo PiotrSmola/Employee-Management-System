@@ -23,15 +23,17 @@ final class CompanyHistory
     }
 
     /**
-     * Year of the last hire or closed history row on or before $date (index lookups only).
+     * Year of the last hire or closed history row on or before $date (index lookups
+     * only: the latest row by index order; MAX() would read the whole range because
+     * of the void_log_id condition).
      */
     public static function lastChangeYear(string $date): ?int
     {
         $dates = [
             DB::table('employees')->where('hire_date', '<=', $date)->max('hire_date'),
-            ReportSources::deptEmp('de')->where('de.to_date', '<=', $date)->max('de.to_date'),
-            ReportSources::titles('t')->where('t.to_date', '<=', $date)->max('t.to_date'),
-            ReportSources::salaries('s')->where('s.to_date', '<=', $date)->max('s.to_date'),
+            ReportSources::deptEmp('de')->where('de.to_date', '<=', $date)->orderByDesc('de.to_date')->value('de.to_date'),
+            ReportSources::titles('t')->where('t.to_date', '<=', $date)->orderByDesc('t.to_date')->value('t.to_date'),
+            ReportSources::salaries('s')->where('s.to_date', '<=', $date)->orderByDesc('s.to_date')->value('s.to_date'),
         ];
 
         $years = array_map(fn ($d) => (int) substr((string) $d, 0, 4), array_filter($dates));

@@ -6,6 +6,7 @@ use App\Exceptions\ImportException;
 use App\Models\ActivityLog;
 use App\Models\User;
 use App\Support\EmployeeDataCache;
+use App\Support\HistoryRows;
 use DateTimeImmutable;
 use DateTimeInterface;
 use Illuminate\Database\QueryException;
@@ -328,7 +329,7 @@ class EmployeeImportService
     {
         $departments = DB::table('departments')->pluck('dept_no')
             ->mapWithKeys(fn ($no) => [strtolower($no) => $no])->all();
-        $titles = DB::table('titles')->distinct()->pluck('title')
+        $titles = HistoryRows::active(DB::table('titles'))->distinct()->pluck('title')
             ->mapWithKeys(fn ($title) => [mb_strtolower($title) => $title])->all();
         $today = new DateTimeImmutable('today');
 
@@ -671,7 +672,7 @@ class EmployeeImportService
     public function templateRows(): array
     {
         $department = DB::table('departments')->orderBy('dept_no')->value('dept_no') ?? 'd001';
-        $titles = DB::table('titles')->distinct()->orderBy('title')->pluck('title');
+        $titles = HistoryRows::active(DB::table('titles'))->distinct()->orderBy('title')->pluck('title');
         $title = $titles->contains('Engineer') ? 'Engineer' : ($titles->first() ?? 'Engineer');
 
         return [

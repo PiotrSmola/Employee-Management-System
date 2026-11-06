@@ -6,6 +6,8 @@ use App\Models\ActivityLog;
 use App\Models\Department;
 use App\Models\User;
 use App\Support\EmployeeDataCache;
+use App\Support\HistoryRows;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 

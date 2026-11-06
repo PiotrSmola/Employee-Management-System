@@ -7,6 +7,7 @@ use App\Models\Employee;
 use App\Queries\EmployeeFilters;
 use App\Queries\EmployeeSearchQuery;
 use App\Support\EmployeeVisibility;
+use App\Support\HistoryRows;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -124,12 +125,12 @@ class EmployeeController extends Controller
 
         $withSalaries = EmployeeVisibility::for($request->user())->canSeeSalaries();
 
-        $departments = DB::table('dept_emp')
+        $departments = HistoryRows::active(DB::table('dept_emp'), 'dept_emp')
             ->join('departments', 'departments.dept_no', '=', 'dept_emp.dept_no')
             ->where('dept_emp.emp_no', $employee->emp_no)
             ->orderBy('dept_emp.from_date')
             ->get(['dept_emp.dept_no', 'departments.dept_name', 'dept_emp.from_date', 'dept_emp.to_date']);
-        $titles = DB::table('titles')->where('emp_no', $employee->emp_no)->orderBy('from_date')->get(['title', 'from_date', 'to_date']);
+        $titles = HistoryRows::active(DB::table('titles'))->where('emp_no', $employee->emp_no)->orderBy('from_date')->get(['title', 'from_date', 'to_date']);
 
         $current = fn ($rows) => $rows->first(fn ($row) => $row->to_date === self::CURRENT);
         $currentDepartment = $current($departments);
@@ -148,7 +149,7 @@ class EmployeeController extends Controller
         ];
 
         if ($withSalaries) {
-            $salaries = DB::table('salaries')->where('emp_no', $employee->emp_no)->orderBy('from_date')->get(['salary', 'from_date', 'to_date']);
+            $salaries = HistoryRows::active(DB::table('salaries'))->where('emp_no', $employee->emp_no)->orderBy('from_date')->get(['salary', 'from_date', 'to_date']);
             $data['salary'] = ($s = $current($salaries)) ? (int) $s->salary : null;
         }
 

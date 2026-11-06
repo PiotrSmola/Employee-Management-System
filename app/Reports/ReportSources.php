@@ -2,6 +2,7 @@
 
 namespace App\Reports;
 
+use App\Support\HistoryRows;
 use Closure;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\JoinClause;
@@ -27,7 +28,7 @@ final class ReportSources
     /** SQL condition every counted row of a history table must meet ($alias: constant from the report code). */
     public static function rowFilter(string $alias): string
     {
-        return '1 = 1';
+        return HistoryRows::sql($alias);
     }
 
     public static function deptEmp(string $alias = 'de'): Builder
@@ -84,7 +85,9 @@ final class ReportSources
 
     private static function table(string $table, string $alias): Builder
     {
-        return DB::table($table.' as '.$alias)->whereRaw(self::rowFilter($alias));
+        $source = $table.' as '.$alias;
+
+        return HistoryRows::active(DB::table($source), $alias);
     }
 
     /**
@@ -94,7 +97,7 @@ final class ReportSources
     {
         return $query->join($table.' as '.$alias, function (JoinClause $join) use ($on, $alias) {
             $on($join);
-            $join->whereRaw(self::rowFilter($alias));
+            HistoryRows::active($join, $alias);
         }, type: $type);
     }
 }

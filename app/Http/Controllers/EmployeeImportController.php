@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Exceptions\ImportException;
 use App\Services\EmployeeImportService;
+use App\Support\HistoryRows;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -29,7 +30,7 @@ class EmployeeImportController extends Controller
         return view('data-tools.import.create', [
             'columns' => EmployeeImportService::COLUMNS,
             'departments' => DB::table('departments')->orderBy('dept_no')->get(['dept_no', 'dept_name']),
-            'titles' => DB::table('titles')->distinct()->orderBy('title')->pluck('title'),
+            'titles' => HistoryRows::active(DB::table('titles'))->distinct()->orderBy('title')->pluck('title'),
             'maxRows' => (int) config('data_tools.imports.max_rows', 5000),
             'maxFileSize' => Number::fileSize((int) config('data_tools.imports.max_file_kb', 5120) * 1024),
         ]);

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Support\EmployeeVisibility;
+use App\Support\HistoryRows;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,7 +23,7 @@ class DepartmentController extends Controller
             fn ($q) => $q->where($column, $visibility->department() ?? EmployeeVisibility::NO_DEPARTMENT)
         );
 
-        $counts = $scope(DB::table('dept_emp'), 'dept_no')
+        $counts = $scope(HistoryRows::active(DB::table('dept_emp')), 'dept_no')
             ->where('to_date', '9999-01-01')
             ->groupBy('dept_no')
             ->pluck(DB::raw('COUNT(*)'), 'dept_no');

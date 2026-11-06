@@ -2,21 +2,39 @@
 
 namespace Tests\Feature\HrOperations;
 
+use App\Enums\ExportFormat;
 use App\Enums\Role;
+use App\Jobs\GenerateExport;
 use App\Livewire\EmployeeFilter;
 use App\Livewire\EmployeeList;
 use App\Models\ActivityLog;
 use App\Models\Department;
 use App\Models\Employee;
+use App\Models\Export;
 use App\Models\User;
+use App\Queries\DepartmentMemberSearch;
+use App\Reports\CompanyHistory;
+use App\Reports\CompensationReports;
+use App\Reports\ReportCatalog;
+use App\Reports\ReportContext;
+use App\Reports\WorkforceReports;
 use App\Services\DashboardService;
+use App\Services\DepartmentManagementService;
+use App\Services\DepartmentStatistics;
+use App\Services\EmployeeExportService;
+use App\Services\EmployeeImportService;
 use App\Services\EmployeeOperationsService;
 use App\Services\EmployeeProfileService;
 use App\Support\EmployeeVisibility;
+use App\Support\ExportSelection;
+use Carbon\CarbonImmutable;
 use Closure;
 use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Laravel\Sanctum\Sanctum;
 use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -25,8 +43,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
  * for SQL that touches a history table without excluding voided rows. Every
  * reference to one of the tables has to come with its own void_log_id condition.
  *
- * A new screen, report or API adds one line to readPaths(); at integration:
- * departments, reports, data tools and the API.
+ * A new screen, report or API adds one line to readPaths().
  */
 class VoidedRowsRuntimeGuardTest extends HrOperationsTestCase
 {
@@ -117,7 +134,102 @@ class VoidedRowsRuntimeGuardTest extends HrOperationsTestCase
                 $operations->correctLatestSalary($employee, 41000, 'Typo', '2023-04-01', 40000);
                 $operations->correctLatestTitle($employee, 'Staff II', 'Typo', '2023-04-01', 'Staff');
             }],
+
+            'departments page' => [fn (self $t) => $t->get(route('departments.index'))->assertOk()],
+            'departments page, manager' => [function (self $t) {
+                $t->signInAs(Role::Manager, $t->salesDepartment());
+                $t->get(route('departments.index'))->assertOk();
+            }],
+            'department page' => [fn (self $t) => $t->get(route('departments.show', $t->salesDepartment()))->assertOk()],
+            'department page, manager' => [function (self $t) {
+                $t->signInAs(Role::Manager, $t->salesDepartment());
+                $t->get(route('departments.show', $t->salesDepartment()))->assertOk();
+            }],
+            'department figures' => [function (self $t) {
+                $statistics = app(DepartmentStatistics::class);
+                $statistics->refreshOverview();
+                $statistics->refreshDetails($t->salesDepartment()->dept_no);
+                $statistics->currentManagers();
+                $statistics->managerHistory($t->salesDepartment()->dept_no);
+                $statistics->forEmployee($t->employeeRecord());
+            }],
+            'department delete form' => [fn (self $t) => app(DepartmentManagementService::class)->deletionBlockedReason($t->salesDepartment())],
+            'manager candidates' => [fn (self $t) => $t->getJson(route('departments.managers.candidates', $t->salesDepartment()))->assertOk()],
+            'manager candidates, by name' => [fn (self $t) => $t->getJson(route('departments.managers.candidates', [$t->salesDepartment(), 'q' => 'Anna']))->assertOk()],
+            'manager candidates, by number' => [fn () => app(DepartmentMemberSearch::class)->search(Department::query()->value('dept_no'), '1')],
+            'manager changes' => [function (self $t) {
+                $departments = app(DepartmentManagementService::class);
+                $other = $t->currentEmployeeOf($t->salesDepartment());
+                $departments->assignManager($t->salesDepartment(), $other->emp_no, '2023-01-01');
+                $departments->endManagement($t->salesDepartment(), '2023-02-01');
+            }],
+
+            'report pages' => [function (self $t) {
+                $t->get(route('reports.workforce'))->assertOk();
+                $t->get(route('reports.compensation'))->assertOk();
+            }],
+            'report pages, department and date' => [function (self $t) {
+                $query = ['department' => $t->salesDepartment()->dept_no, 'as_of' => '2001-06-30'];
+                $t->get(route('reports.workforce', $query))->assertOk();
+                $t->get(route('reports.compensation', $query))->assertOk();
+            }],
+            'report pages, manager' => [function (self $t) {
+                $t->signInAs(Role::Manager, $t->salesDepartment());
+                $t->get(route('reports.workforce'))->assertOk();
+                $t->get(route('reports.compensation'))->assertOk();
+            }],
+            'report figures, company' => [fn (self $t) => $t->readReports(ReportContext::make(EmployeeVisibility::unrestricted()))],
+            'report figures, department' => [fn (self $t) => $t->readReports(ReportContext::make(EmployeeVisibility::unrestricted(), $t->salesDepartment()->dept_no))],
+            'report figures, manager' => [fn (self $t) => $t->readReports(ReportContext::make(EmployeeVisibility::for(User::factory()->manager($t->salesDepartment())->create())))],
+            'report figures, as-of date' => [fn (self $t) => $t->readReports(ReportContext::make(EmployeeVisibility::unrestricted(), null, CarbonImmutable::parse('2001-06-30')))],
+            'report warm command' => [fn (self $t) => $t->artisan('reports:warm', ['--fresh' => true])->assertSuccessful()],
+            'company history' => [fn () => CompanyHistory::lastChangeYear('2001-06-30')],
+
+            'api employee list' => [function (self $t) {
+                Sanctum::actingAs($t->admin(), ['read']);
+                $t->getJson(route('api.v1.employees.index'))->assertOk();
+            }],
+            'api employee list, every filter' => [function (self $t) {
+                Sanctum::actingAs($t->admin(), ['read']);
+                $t->getJson(route('api.v1.employees.index', [
+                    'status' => 'current', 'department' => $t->salesDepartment()->dept_no, 'title' => 'Engineer',
+                    'salary_min' => 1000, 'salary_max' => 90000, 'sort' => 'salary',
+                ]))->assertOk();
+            }],
+            'api employee list, manager' => [function (self $t) {
+                Sanctum::actingAs(User::factory()->manager($t->salesDepartment())->create(), ['read']);
+                $t->getJson(route('api.v1.employees.index'))->assertOk();
+            }],
+            'api employee' => [function (self $t) {
+                Sanctum::actingAs($t->admin(), ['read']);
+                $t->getJson(route('api.v1.employees.show', $t->employeeRecord()->emp_no))->assertOk();
+            }],
+            'api departments' => [function (self $t) {
+                Sanctum::actingAs($t->admin(), ['read']);
+                $t->getJson(route('api.v1.departments.index'))->assertOk();
+            }],
+
+            'xlsx export' => [fn (self $t) => $t->post(route('employees.export'), ['format' => 'xlsx', 'selectAll' => '1'])->assertOk()],
+            'export selection' => [fn (self $t) => ExportSelection::fromArray(['selectAll' => true, 'ids' => [$t->formerEmployeeRecord()->emp_no]])->query(EmployeeVisibility::unrestricted())->ids()],
+            'export form' => [fn (self $t) => $t->get(route('exports.index'))->assertOk()],
+            'queued csv export' => [fn (self $t) => $t->runQueuedExport(ExportFormat::Csv)],
+            'queued xlsx export' => [fn (self $t) => $t->runQueuedExport(ExportFormat::Xlsx)],
+            'queued pdf export' => [fn (self $t) => $t->runQueuedExport(ExportFormat::Pdf)],
+
+            'import form' => [fn (self $t) => $t->get(route('employees.import.create'))->assertOk()],
+            'import template' => [fn (self $t) => $t->get(route('employees.import.template', 'csv'))->assertOk()],
+            'import preview' => [function (self $t) {
+                $file = UploadedFile::fake()->createWithContent('new.csv', "first_name,last_name,birth_date,gender,hire_date,department,title,salary\nJane,Doe,1980-01-02,F,2020-01-01,{$t->salesDepartment()->dept_no},Engineer,50000\n");
+                $response = $t->post(route('employees.import.upload'), ['file' => $file]);
+                $response->assertRedirect();
+                $t->get($response->headers->get('Location'))->assertOk()->assertSee('Import 1 employees');
+            }],
+            'import validation' => [fn (self $t) => app(EmployeeImportService::class)->validate([])],
         ];
+
+        foreach ([...WorkforceReports::KEYS, ...CompensationReports::KEYS] as $report) {
+            $paths["report csv {$report}"] = [fn (self $t) => $t->get(route('reports.csv', $report))->assertOk()->streamedContent()];
+        }
 
         foreach (['name', 'hire_date', 'gender', 'department', 'title', 'salary'] as $sortBy) {
             foreach (['asc', 'desc'] as $direction) {
@@ -171,6 +283,42 @@ class VoidedRowsRuntimeGuardTest extends HrOperationsTestCase
         $query->count();
         $query->paginate(20, 1);
         $query->rowsFor([$this->employee->emp_no, $this->former->emp_no]);
+    }
+
+    public function readReports(ReportContext $context): void
+    {
+        $catalog = app(ReportCatalog::class);
+
+        foreach ([ReportCatalog::WORKFORCE, ReportCatalog::COMPENSATION] as $section) {
+            $catalog->summary($section, $context);
+            $catalog->tables($section, $context);
+        }
+    }
+
+    public function runQueuedExport(ExportFormat $format): void
+    {
+        Storage::fake('local');
+
+        $export = Export::create([
+            'user_id' => $this->admin()->getKey(),
+            'format' => $format,
+            'params' => ['selection' => ['filters' => [], 'selectAll' => true, 'ids' => []], 'columns' => []],
+            'status' => Export::STATUS_PENDING,
+        ]);
+
+        (new GenerateExport($export->id))->handle(app(EmployeeExportService::class));
+
+        $this->assertSame(Export::STATUS_COMPLETED, $export->refresh()->status, (string) $export->error);
+    }
+
+    public function admin(): User
+    {
+        return $this->user;
+    }
+
+    public function currentEmployeeOf(Department $department): Employee
+    {
+        return $this->currentEmployee($department);
     }
 
     public function employeeRecord(): Employee

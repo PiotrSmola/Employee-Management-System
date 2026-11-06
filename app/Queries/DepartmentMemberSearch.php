@@ -2,6 +2,7 @@
 
 namespace App\Queries;
 
+use App\Support\HistoryRows;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -39,7 +40,7 @@ class DepartmentMemberSearch
 
         $rows = $term === '' ? $this->first($deptNo, $limit) : $this->matching($deptNo, $term, $limit);
 
-        $titles = $rows->isEmpty() ? collect() : DB::table('titles')
+        $titles = $rows->isEmpty() ? collect() : HistoryRows::active(DB::table('titles'))
             ->whereIn('emp_no', $rows->pluck('emp_no'))
             ->where('to_date', self::CURRENT)
             ->pluck('title', 'emp_no');
@@ -66,7 +67,7 @@ class DepartmentMemberSearch
     {
         $roles = [];
 
-        $periods = DB::table('dept_manager')
+        $periods = HistoryRows::active(DB::table('dept_manager'))
             ->where('dept_no', $deptNo)
             ->whereIn('emp_no', $empNos)
             ->get(['emp_no', 'to_date']);
@@ -85,7 +86,7 @@ class DepartmentMemberSearch
      */
     private function first(string $deptNo, int $limit): Collection
     {
-        $ids = DB::table('dept_emp')
+        $ids = HistoryRows::active(DB::table('dept_emp'))
             ->where('dept_no', $deptNo)
             ->where('to_date', self::CURRENT)
             ->orderBy('emp_no')
@@ -107,7 +108,7 @@ class DepartmentMemberSearch
 
     private function members(string $deptNo): Builder
     {
-        return DB::table('dept_emp as de')
+        return HistoryRows::active(DB::table('dept_emp as de'), 'de')
             ->join('employees as e', 'e.emp_no', '=', 'de.emp_no')
             ->where('de.dept_no', $deptNo)
             ->where('de.to_date', self::CURRENT);
