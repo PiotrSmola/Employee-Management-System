@@ -2,6 +2,8 @@
 
 A web-based employee management platform built with Laravel 12 on the MySQL "employees" sample dataset (~300k employees, ~2.8M salary rows): directory, HR operations with a full audit trail, departments and managers, reports, bulk data tools and a REST API, with role-based access throughout.
 
+Want to see it without installing anything? Jump to the [interface preview](#interface-preview).
+
 ## Features
 
 ### Core Functionality
@@ -79,6 +81,7 @@ The script:
 - waits until the app responds and prints its URL.
 
 Preferred ports can be overridden: `.\docker-up.ps1 -AppPort 8080 -DbPort 3310` or `./docker-up.sh 8080 3310`.
+Both ports are published on `127.0.0.1` only, so the stack is not reachable from the network.
 
 | Service | Container | Host port | Credentials |
 |---------|-----------|-----------|-------------|
@@ -155,7 +158,8 @@ re-creates accounts:
 ### Production settings
 
 The Docker stack is a local development setup (`APP_ENV=local`, ports bound to `127.0.0.1`, demo
-accounts). For anything reachable by other people set, e.g. in `.env.docker`:
+accounts, `APP_DEBUG=false` unless you set `APP_DEBUG=true` in `.env.docker` for error details).
+For anything reachable by other people set, e.g. in `.env.docker`:
 
 ```env
 APP_ENV=production
@@ -266,16 +270,12 @@ curl examples.
 ### 1. Clone the Repository
 ```bash
 git clone https://github.com/PiotrSmola/Employee-Management-System.git
-cd employee-management-system
+cd Employee-Management-System
 ```
 
 ### 2. Install Dependencies
 ```bash
-# Install PHP dependencies
 composer install
-
-# Install Node.js dependencies (if applicable)
-npm install
 ```
 
 ### 3. Environment Configuration
@@ -567,3 +567,57 @@ PDF generation options live in `config/dompdf.php`. Remote files, PHP and JavaSc
 ### Database
 Give InnoDB a buffer pool that holds the dataset (`innodb_buffer_pool_size`, 1 GB in Docker,
 `DB_BUFFER_POOL_SIZE`): the default of 128 MB is much smaller than the tables.
+
+## Interface Preview
+
+Screenshots of the running application on the full sample dataset (300,024 employees, signed in
+as an administrator). Names and figures come from the public
+[employees sample database](https://github.com/datacharmer/test_db).
+
+### Sign-in and dashboard
+
+| Sign-in | Dashboard |
+|---------|-----------|
+| ![Sign-in page](docs/screenshots/01-login.png) | ![Dashboard with company figures](docs/screenshots/02-dashboard.png) |
+
+### Employee directory and export
+
+| Search, filters and sorting | Export with a column chooser |
+|-----------------------------|------------------------------|
+| ![Employee directory](docs/screenshots/03-directory.png) | ![Export dialog](docs/screenshots/04-export-modal.png) |
+
+### Employee profile and HR actions
+
+| Profile with salary history | Transfer dialog |
+|-----------------------------|-----------------|
+| ![Employee profile](docs/screenshots/05-employee-profile.png) | ![HR action dialog](docs/screenshots/06-hr-action.png) |
+
+### Departments
+
+| Overview | Department page |
+|----------|-----------------|
+| ![Departments overview](docs/screenshots/07-departments.png) | ![Department page](docs/screenshots/08-department.png) |
+
+### Reports
+
+| Workforce | Compensation |
+|-----------|--------------|
+| ![Workforce report](docs/screenshots/09-report-workforce.png) | ![Compensation report](docs/screenshots/10-report-compensation.png) |
+
+### Audit log and import
+
+| Audit log | Import of new employees |
+|-----------|-------------------------|
+| ![Audit log](docs/screenshots/11-audit-log.png) | ![Import page](docs/screenshots/12-import.png) |
+
+### Dark mode
+
+| Dashboard | Report |
+|-----------|--------|
+| ![Dashboard in dark mode](docs/screenshots/13-dark-dashboard.png) | ![Report in dark mode](docs/screenshots/14-dark-report.png) |
+
+### Mobile
+
+| Dashboard | Directory |
+|-----------|-----------|
+| <img src="docs/screenshots/15-mobile-dashboard.png" alt="Dashboard on a phone" width="280"> | <img src="docs/screenshots/16-mobile-directory.png" alt="Directory on a phone" width="280"> |
