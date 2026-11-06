@@ -130,8 +130,9 @@ class EmployeeSearchQuery
     /**
      * Members of $deptNo counted on dept_emp alone (the department filter alone,
      * e.g. a manager's unfiltered list). Exact: a current member has exactly one
-     * row in the department (primary key emp_no + dept_no), a former member exactly
-     * one "last" row, and the two groups are disjoint. The "is there a later row"
+     * current row in the department (a department can hold several periods of an
+     * employee - primary key emp_no + dept_no + from_date - but only the latest is
+     * open), a former member exactly one "last" row, and the two groups are disjoint. The "is there a later row"
      * check is a primary-key lookup per row, which beats the semi-join plan here.
      */
     private function departmentCount(string $deptNo, string $status): int
