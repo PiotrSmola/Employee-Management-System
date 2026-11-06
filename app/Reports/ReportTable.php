@@ -109,7 +109,7 @@ final class ReportTable
      */
     public function csvRows(): array
     {
-        $lines = [array_map(fn (array $column) => $column[0], array_values($this->columns))];
+        $lines = [array_map(fn (array $column) => self::csvText($column[0]), array_values($this->columns))];
 
         foreach ([...$this->rows, ...$this->totals] as $row) {
             $line = [];
@@ -128,13 +128,31 @@ final class ReportTable
             return '';
         }
 
-        return match ($type) {
-            'money', 'int' => is_numeric($value) ? (int) round((float) $value) : $value,
-            'percent', 'years' => is_numeric($value) ? round((float) $value, 2) : $value,
-            // Text cells could start with a spreadsheet formula character (=, +, -, @).
-            default => is_string($value) && $value !== '' && in_array($value[0], ['=', '+', '-', '@', "\t", "\r"], true)
-                ? "'".$value
-                : $value,
-        };
+        if (is_numeric($value) && in_array($type, ['money', 'int'], true)) {
+            return (int) round((float) $value);
+        }
+
+        if (is_numeric($value) && in_array($type, ['percent', 'years'], true)) {
+            return round((float) $value, 2);
+        }
+
+        return self::csvText($value);
+    }
+
+    /**
+     * Strings a spreadsheet would run as a formula (=, +, -, @, also after leading
+     * whitespace) get a leading apostrophe. Department names and titles are free text.
+     */
+    private static function csvText(mixed $value): mixed
+    {
+        if (! is_string($value)) {
+            return $value;
+        }
+
+        $trimmed = ltrim($value);
+
+        return $trimmed !== '' && in_array($trimmed[0], ['=', '+', '-', '@'], true) || $value !== $trimmed
+            ? "'".$value
+            : $value;
     }
 }

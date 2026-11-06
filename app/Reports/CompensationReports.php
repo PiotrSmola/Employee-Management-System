@@ -17,6 +17,9 @@ use Illuminate\Database\Query\Builder;
  *  - salary_growth: salaries rows grouped by start and end year (intersected
  *    with the department rows for a department scope); the average on 31 Dec
  *    of each year is (sum of started - sum of ended) / (count started - count ended).
+ *    Company-wide this counts salary rows, while the snapshot counts salaries of
+ *    employees with an open department row, so somebody paid before their first
+ *    department row (or with two open salaries) is only in this series.
  */
 class CompensationReports
 {
@@ -230,7 +233,7 @@ class CompensationReports
                 'labels' => array_column($rows, 'year'),
                 'datasets' => [ChartSeries::one(__('Average salary'), array_map(fn ($v) => $v === null ? null : round($v), array_column($rows, 'average')))],
             ]],
-            description: __('Average salary of the employees on 31 December of each year (the last year: on the as-of date).'),
+            description: __('Average of the salaries paid on 31 December of each year (the last year: on the as-of date). Counts every open salary, also of employees without a department on that day.'),
         );
     }
 
@@ -311,9 +314,10 @@ class CompensationReports
      * One pass in PHP over the open salaries (about 240k rows in the full dataset)
      * instead of SQL aggregation: medians in MySQL need a sort per partition, and
      * with the default sort buffer and temporary table sizes those sorts go to disk
-     * and take far longer than the join itself. The rows are held by the database
-     * client while they are read, and the page keeps one number per employee and
-     * group: about 100 MB on the full dataset, see {@see README.md}.
+     * and take far longer than the join itself. A cursor does not save memory here:
+     * PDO's MySQL client buffers the whole result, and the loop keeps one number per
+     * employee and group. Together that is about 60 MB on the full dataset, on top of
+     * the 45 MB of the framework, so keep memory_limit above 128 MB in mind.
      *
      * @return array{overall: array<string, mixed>, departments: array<string, array<string, mixed>>, titles: array<string, array<string, mixed>>}
      */

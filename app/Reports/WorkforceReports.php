@@ -17,7 +17,8 @@ use Illuminate\Support\Facades\DB;
  *    headcount on 31 Dec of a year = rows started - rows ended up to that day, so
  *    the whole history comes from one scan - plus the rows of employees with several
  *    departments (transfers; a row that ends without one is a leaver) and hires per
- *    year.
+ *    year. Overlapping department rows would count twice in these series; the full
+ *    dataset has none, the figures of the as-of date below handle them.
  *  - snapshot: employees with an open dept_emp row on the as-of date, grouped by
  *    department, gender and 5-year age band (count + summed tenure days).
  *  - title_gender: open titles rows on the as-of date by title and gender.
@@ -471,21 +472,24 @@ class WorkforceReports
     }
 
     /**
-     * Department rows that are not an employee's first (a transfer in) or last
-     * (a transfer out). Only employees with several rows matter: about a tenth.
+     * Moves between departments: a row that starts while another of the employee's
+     * rows is open or ends that day (transfer in), and a row that ends while another
+     * is open or starts that day (transfer out). With a gap between two rows the
+     * employee left and came back: a leaver, not a transfer. Only employees with
+     * several rows matter: about a tenth.
      *
      * @return Collection<int, object>
      */
     private function transfers(ReportContext $context): Collection
     {
         $date = $context->date();
-        $spans = $this->firstAndLastRows($context)->havingRaw('COUNT(*) > 1');
+        $other = 'SELECT 1 FROM '.ReportSources::DEPT_EMP.' o WHERE o.emp_no = de.emp_no AND '.ReportSources::rowFilter('o');
 
         return ReportSources::deptEmp('de')
-            ->joinSub($spans, 'f', 'f.emp_no', '=', 'de.emp_no')
+            ->joinSub($this->firstRows($context)->havingRaw('COUNT(*) > 1'), 'f', 'f.emp_no', '=', 'de.emp_no')
             ->select('de.dept_no')
-            ->selectRaw('CASE WHEN de.from_date <= ? AND '.self::ROW_KEY.' <> f.first_row THEN YEAR(de.from_date) END AS in_year', [$date])
-            ->selectRaw('CASE WHEN de.to_date <= ? AND de.to_date <> f.last_to THEN YEAR(de.to_date) END AS out_year', [$date])
+            ->selectRaw("CASE WHEN de.from_date <= ? AND EXISTS ({$other} AND o.from_date <= de.from_date AND o.to_date >= de.from_date AND o.to_date < de.to_date) THEN YEAR(de.from_date) END AS in_year", [$date])
+            ->selectRaw("CASE WHEN de.to_date <= ? AND EXISTS ({$other} AND o.from_date <= de.to_date AND o.to_date > de.to_date) THEN YEAR(de.to_date) END AS out_year", [$date])
             ->selectRaw('COUNT(*) AS n')
             ->when($context->department !== null, fn ($q) => $q->where('de.dept_no', $context->department))
             ->groupBy('de.dept_no', 'in_year', 'out_year')
@@ -506,7 +510,7 @@ class WorkforceReports
             ? DB::table('employees as e')
             : ReportSources::deptEmp('de')
                 ->join('employees as e', 'e.emp_no', '=', 'de.emp_no')
-                ->leftJoinSub($this->firstAndLastRows($context)->havingRaw('COUNT(*) > 1'), 'f', 'f.emp_no', '=', 'de.emp_no')
+                ->leftJoinSub($this->firstRows($context)->havingRaw('COUNT(*) > 1'), 'f', 'f.emp_no', '=', 'de.emp_no')
                 ->where('de.dept_no', $context->department)
                 ->where(fn ($q) => $q->whereNull('f.emp_no')->orWhereRaw(self::ROW_KEY.' = f.first_row'));
 
@@ -520,13 +524,13 @@ class WorkforceReports
     }
 
     /**
-     * First and last dept_emp row per employee of the scope (primary key order, no sorting).
+     * First dept_emp row per employee of the scope (primary key order, no sorting).
      */
-    private function firstAndLastRows(ReportContext $context): Builder
+    private function firstRows(ReportContext $context): Builder
     {
         $spans = ReportSources::deptEmp('de')
             ->select('de.emp_no')
-            ->selectRaw('MIN('.self::ROW_KEY.') AS first_row, MAX(de.to_date) AS last_to')
+            ->selectRaw('MIN('.self::ROW_KEY.') AS first_row')
             ->when($context->department !== null, fn ($q) => $q->whereIn('de.emp_no', ReportSources::deptEmp('de_d')
                 ->select('de_d.emp_no')->where('de_d.dept_no', $context->department)))
             ->groupBy('de.emp_no');
@@ -565,7 +569,7 @@ class WorkforceReports
             $query = ReportSources::open(ReportSources::deptEmp('de'), 'de', $date)
                 ->join('employees as e', 'e.emp_no', '=', 'de.emp_no')
                 ->selectRaw('de.dept_no, e.gender, FLOOR(TIMESTAMPDIFF(YEAR, e.birth_date, ?) / 5) * 5 AS age_band', [$date])
-                ->selectRaw('COUNT(*) AS n, SUM(DATEDIFF(?, e.hire_date)) AS tenure_days', [$date])
+                ->selectRaw('COUNT(*) AS n, SUM(GREATEST(DATEDIFF(?, e.hire_date), 0)) AS tenure_days', [$date])
                 ->when($context->department !== null, fn ($q) => $q->where('de.dept_no', $context->department))
                 ->groupBy('de.dept_no', 'e.gender', 'age_band', 'is_primary');
             $context->constrain($query, 'de.emp_no');
