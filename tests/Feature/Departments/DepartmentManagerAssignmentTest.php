@@ -100,7 +100,6 @@ class DepartmentManagerAssignmentTest extends TestCase
             'former employee of the department' => ['former', '2001-01-01', 'emp_no'],
             'unknown employee' => ['unknown', '2001-01-01', 'emp_no'],
             'already the current manager' => ['boss', '2001-01-01', 'emp_no'],
-            'managed the department before' => ['previous', '2001-01-01', 'emp_no'],
             'before the current manager started' => ['engineer', '1994-12-31', 'from_date'],
             'on the day the current manager started' => ['engineer', '1995-01-01', 'from_date'],
             'before joining the department' => ['transferred', '1996-01-01', 'from_date'],
@@ -118,9 +117,6 @@ class DepartmentManagerAssignmentTest extends TestCase
             'former' => Employee::factory()->former($this->dev, endDate: '2000-01-01')->create(['hire_date' => '1991-01-01'])->emp_no,
             'unknown' => 999999,
             'boss' => $this->boss->emp_no,
-            'previous' => tap(Employee::factory()->current($this->dev)->create(['hire_date' => '1986-01-01']), fn ($e) => DeptManager::create([
-                'emp_no' => $e->emp_no, 'dept_no' => 'd005', 'from_date' => '1987-01-01', 'to_date' => '1995-01-01',
-            ]))->emp_no,
             'engineer' => $this->engineer->emp_no,
             // In Sales until ~1997, then in Development.
             'transferred' => Employee::factory()->current($this->dev, previousDepartment: $this->sales)->create(['hire_date' => '1992-01-01'])->emp_no,
@@ -135,6 +131,63 @@ class DepartmentManagerAssignmentTest extends TestCase
 
         $this->assertSame($before, $this->periods('d005'));
         $this->assertSame(0, ActivityLog::query()->where('action', 'department.manager_assigned')->count());
+    }
+
+    public function test_a_former_manager_can_manage_the_department_again(): void
+    {
+        $former = Employee::factory()->current($this->dev)->create(['first_name' => 'Fay', 'last_name' => 'Former', 'hire_date' => '1986-01-01']);
+        DeptManager::create(['emp_no' => $former->emp_no, 'dept_no' => 'd005', 'from_date' => '1987-01-01', 'to_date' => '1995-01-01']);
+
+        $this->post(route('departments.managers.store', $this->dev), ['emp_no' => $former->emp_no, 'from_date' => '2001-01-01'])
+            ->assertSessionHasNoErrors();
+
+        $this->assertSame([
+            [$former->emp_no, '1987-01-01', '1995-01-01'],
+            [$this->boss->emp_no, '1995-01-01', '2001-01-01'],
+            [$former->emp_no, '2001-01-01', '9999-01-01'],
+        ], $this->periods('d005'));
+
+        $this->assertSame(['Fay Former' => 'current'], collect($this->candidates('Fay'))->pluck('manager', 'name')->all());
+        $this->assertSame(2, collect(app(DepartmentStatistics::class)->managerHistory('d005'))->where('emp_no', $former->emp_no)->count());
+
+        $this->post(route('departments.managers.store', $this->dev), ['emp_no' => $former->emp_no, 'from_date' => '2001-06-01'])
+            ->assertSessionHasErrorsIn(self::BAG, 'emp_no');
+    }
+
+    public function test_two_rows_in_one_department(): void
+    {
+        // Left the department and came back: two dept_emp rows, one of them current.
+        $returned = Employee::factory()->current($this->dev)->create(['first_name' => 'Rae', 'last_name' => 'Returned', 'hire_date' => '1990-01-01']);
+        DB::table('dept_emp')->where('emp_no', $returned->emp_no)->update(['from_date' => '1999-01-01']);
+        DB::table('dept_emp')->insert(['emp_no' => $returned->emp_no, 'dept_no' => 'd005', 'from_date' => '1990-01-01', 'to_date' => '1993-01-01']);
+
+        $this->assertCount(1, $this->candidates('Rae'), 'Only the current row makes a candidate.');
+
+        // The date is checked against the current row, not the earlier one.
+        $this->post(route('departments.managers.store', $this->dev), ['emp_no' => $returned->emp_no, 'from_date' => '1998-01-01'])
+            ->assertSessionHasErrorsIn(self::BAG, 'from_date');
+        $this->post(route('departments.managers.store', $this->dev), ['emp_no' => $returned->emp_no, 'from_date' => '2000-01-01'])
+            ->assertSessionHasNoErrors();
+
+        // Two management periods of the same employee in the same department.
+        $this->post(route('departments.managers.end', $this->dev), ['to_date' => '2001-01-01'])->assertSessionHasNoErrors();
+        $this->post(route('departments.managers.store', $this->dev), ['emp_no' => $returned->emp_no, 'from_date' => '2002-01-01'])
+            ->assertSessionHasNoErrors();
+
+        $this->assertSame([
+            [$this->boss->emp_no, '1995-01-01', '2000-01-01'],
+            [$returned->emp_no, '2000-01-01', '2001-01-01'],
+            [$returned->emp_no, '2002-01-01', '9999-01-01'],
+        ], $this->periods('d005'));
+
+        $this->get(route('departments.show', $this->dev))->assertOk();
+        $this->assertSame($returned->emp_no, (int) $this->currentManagerOf('d005'));
+
+        // Ending the management closes the current period only.
+        $this->post(route('departments.managers.end', $this->dev), ['to_date' => '2002-06-01'])->assertSessionHasNoErrors();
+        $this->assertNull($this->currentManagerOf('d005'));
+        $this->assertSame([$returned->emp_no, '2000-01-01', '2001-01-01'], $this->periods('d005')[1]);
+        $this->assertSame([$returned->emp_no, '2002-01-01', '2002-06-01'], $this->periods('d005')[2]);
     }
 
     public function test_validation_errors_are_shown_next_to_the_manager_form(): void
@@ -284,6 +337,11 @@ class DepartmentManagerAssignmentTest extends TestCase
         return $this->getJson(route('departments.managers.candidates', ['department' => 'd005', 'q' => $q]))
             ->assertOk()
             ->json('data');
+    }
+
+    private function currentManagerOf(string $deptNo): ?int
+    {
+        return app(DepartmentStatistics::class)->currentManagers([$deptNo])->first()?->emp_no;
     }
 
     private function warmFigures(): void

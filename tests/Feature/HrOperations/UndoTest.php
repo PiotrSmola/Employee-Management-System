@@ -7,8 +7,13 @@ use App\Models\ActivityLog;
 use App\Models\Department;
 use App\Models\Employee;
 use App\Services\AuditLogger;
+use App\Services\DepartmentManagementService;
+use App\Services\DepartmentStatistics;
 use App\Services\EmployeeOperationsService;
 use App\Support\AuditLogPresenter;
+use App\Support\EmployeeDataCache;
+use App\Support\FigureCache;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -302,6 +307,69 @@ class UndoTest extends HrOperationsTestCase
 
         $changes = ActivityLog::where('action', 'employee.change_undone')->sole()->changes;
         $this->assertSame(['dept_emp', 'dept_manager'], collect($changes['reopened_rows'])->pluck('table')->all());
+    }
+
+    public function test_ending_a_management_writes_the_same_entry_from_every_screen(): void
+    {
+        $sales = Department::factory()->create();
+        $research = Department::factory()->create();
+        $employee = $this->currentEmployee($research);
+        $this->makeManager($employee, $research->dept_no, '2001-01-01');
+
+        $this->post(route('employees.transfer', $employee->emp_no), ['dept_no' => $sales->dept_no, 'effective_date' => '2024-05-01'])->assertSessionHasNoErrors();
+
+        $ended = ActivityLog::where('action', 'department.manager_ended')->sole();
+        $this->assertSame($research->dept_no, $ended->subject_id);
+        $this->assertEquals(['emp_no' => $employee->emp_no, 'from_date' => '2001-01-01', 'to_date' => '2024-05-01', 'cause' => 'employee.transferred'], $ended->changes);
+
+        $this->undo($employee)->assertSessionHasNoErrors();
+
+        $restored = ActivityLog::where('action', 'department.manager_restored')->sole();
+        $this->assertSame($research->dept_no, $restored->subject_id);
+        $this->assertEquals(['emp_no' => $employee->emp_no, 'from_date' => '2001-01-01', 'cause' => 'employee.transferred'], $restored->changes);
+    }
+
+    public function test_a_management_taken_over_by_another_manager_blocks_the_undo(): void
+    {
+        $sales = Department::factory()->create();
+        $research = Department::factory()->create();
+        $employee = $this->currentEmployee($research);
+        $successor = $this->currentEmployee($research);
+        $this->makeManager($employee, $research->dept_no, '2001-01-01');
+
+        $this->post(route('employees.transfer', $employee->emp_no), ['dept_no' => $sales->dept_no, 'effective_date' => '2024-05-01'])->assertSessionHasNoErrors();
+        app(DepartmentManagementService::class)->assignManager($research, $successor->emp_no, '2024-05-01');
+
+        $this->undo($employee)->assertSessionHasErrorsIn('undo', ['undo' => 'The department got another manager after this change, so it cannot be undone any more.']);
+
+        $this->assertSame(1, DB::table('dept_manager')->where('dept_no', $research->dept_no)->where('void_log_id', 0)->where('to_date', self::CURRENT)->count());
+        $this->assertSame($sales->dept_no, $this->current('dept_emp', $employee->emp_no)->dept_no);
+    }
+
+    public function test_an_undo_flushes_every_cached_figure(): void
+    {
+        $sales = Department::factory()->create();
+        $research = Department::factory()->create();
+        $employee = $this->currentEmployee($sales);
+        app(DepartmentStatistics::class)->refreshOverview();
+        app(DepartmentStatistics::class)->refreshDetails($sales->dept_no);
+        $version = EmployeeDataCache::reportsVersion();
+        Cache::put(EmployeeDataCache::DASHBOARD_STATS, ['cached']);
+        Cache::put(EmployeeDataCache::departmentStats($sales->dept_no), ['cached']);
+
+        $this->post(route('employees.transfer', $employee->emp_no), ['dept_no' => $research->dept_no, 'effective_date' => '2024-05-01'])->assertSessionHasNoErrors();
+        Cache::put(EmployeeDataCache::DASHBOARD_STATS, ['cached']);
+        Cache::put(EmployeeDataCache::departmentStats($sales->dept_no), ['cached']);
+        $this->assertTrue(FigureCache::isFresh(EmployeeDataCache::DEPARTMENTS_OVERVIEW), 'Other changes leave the overview to its short lifetime.');
+
+        $this->undo($employee)->assertSessionHasNoErrors();
+
+        $this->assertFalse(Cache::has(EmployeeDataCache::DASHBOARD_STATS));
+        $this->assertFalse(Cache::has(EmployeeDataCache::departmentStats($sales->dept_no)));
+        $this->assertFalse(FigureCache::isFresh(EmployeeDataCache::DEPARTMENTS_OVERVIEW));
+        $this->assertFalse(FigureCache::isFresh(EmployeeDataCache::departmentDetails($sales->dept_no)));
+        $this->assertFalse(FigureCache::isFresh(EmployeeDataCache::departmentDetails($research->dept_no)));
+        $this->assertNotSame($version, EmployeeDataCache::reportsVersion());
     }
 
     /**

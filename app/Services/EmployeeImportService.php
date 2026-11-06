@@ -32,10 +32,8 @@ use ZipArchive;
  *     employees with their current history (employees, dept_emp, titles, salaries:
  *     from the hire date, to_date 9999-01-01) in one transaction.
  *
- * Employee numbers are allocated inside that transaction after locking the highest
- * existing emp_no (SELECT ... FOR UPDATE), so concurrent imports - or any other code
- * that allocates numbers the same way ({@see allocateEmployeeNumbers()}) - never
- * hand out the same number.
+ * Employee numbers come from EmployeeNumberAllocator, like those of a hire, so
+ * concurrent imports and hires never hand out the same number.
  */
 class EmployeeImportService
 {
@@ -72,9 +70,9 @@ class EmployeeImportService
 
     private const INSERT_CHUNK = 500;
 
-    private const COMMIT_ATTEMPTS = 5;
-
     private const CACHE_PREFIX = 'employee-import:';
+
+    public function __construct(private readonly EmployeeNumberAllocator $numbers) {}
 
     // ------------------------------------------------------------------ analyze
 
@@ -586,9 +584,7 @@ class EmployeeImportService
         }
 
         try {
-            // Concurrent allocations can deadlock on the gap above the highest number (InnoDB gives
-            // one of them up): the attempts retry that one, with the number allocated anew.
-            $result = DB::transaction(fn () => $this->createEmployees($analysis, $staged['file_name'], $user), self::COMMIT_ATTEMPTS);
+            $result = $this->numbers->transaction(fn () => $this->createEmployees($analysis, $staged['file_name'], $user));
         } catch (QueryException $e) {
             // Details go to the log only. The upload stays staged, so the user can try again.
             report($e);
@@ -607,7 +603,7 @@ class EmployeeImportService
      */
     private function createEmployees(array $analysis, string $fileName, User $user): array
     {
-        $next = $this->allocateEmployeeNumbers();
+        $next = $this->numbers->next();
 
         // Re-check after taking the lock: concurrent imports are visible now.
         $rows = $this->validate(array_map(fn ($row) => ['line' => $row['line'], 'values' => $row['values']], $analysis['rows']));
@@ -647,19 +643,6 @@ class EmployeeImportService
         ], $user);
 
         return $result + ['departments' => array_values(array_unique(array_column($deptEmp, 'dept_no')))];
-    }
-
-    /**
-     * The first free employee number; call inside a transaction. Locks the row with the
-     * highest emp_no (and the gap above it) until the transaction ends, so concurrent
-     * callers wait and then see the numbers taken meanwhile. New numbers start after
-     * the dataset's first number (10001) at the earliest.
-     */
-    public function allocateEmployeeNumbers(): int
-    {
-        $last = DB::table('employees')->orderByDesc('emp_no')->lockForUpdate()->value('emp_no');
-
-        return max((int) $last, 10000) + 1;
     }
 
     // ----------------------------------------------------------------- template

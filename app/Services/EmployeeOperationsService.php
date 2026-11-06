@@ -8,10 +8,7 @@ use App\Models\Employee;
 use App\Support\EmployeeDataCache;
 use App\Support\EmploymentRules;
 use App\Support\HistoryRows;
-use Closure;
 use Illuminate\Database\Query\Builder;
-use Illuminate\Database\QueryException;
-use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -47,9 +44,6 @@ use Throwable;
 class EmployeeOperationsService
 {
     public const CURRENT = EmploymentRules::CURRENT;
-
-    /** Attempts of a hire when the employee number was taken meanwhile or the transaction deadlocked. */
-    public const HIRE_ATTEMPTS = 5;
 
     /** How long the last change of an employee can be undone. */
     public const UNDO_HOURS = 24;
@@ -89,7 +83,10 @@ class EmployeeOperationsService
     /** Row changes of the running operation (written to the audit entry as `_undo`). */
     private array $ops = [];
 
-    public function __construct(private readonly EmployeeNumberAllocator $numbers) {}
+    public function __construct(
+        private readonly EmployeeNumberAllocator $numbers,
+        private readonly DepartmentManagementService $departments,
+    ) {}
 
     /**
      * Hire a new employee: employees + dept_emp + titles + salaries rows starting on the hire date.
@@ -110,7 +107,7 @@ class EmployeeOperationsService
         $first = trim($data['first_name']);
         $last = trim($data['last_name']);
 
-        $employee = $this->withRetries(fn () => DB::transaction(function () use ($data, $title, $salary, $first, $last, $allowDuplicate) {
+        $employee = $this->numbers->transaction(function () use ($data, $title, $salary, $first, $last, $allowDuplicate) {
             if (! $allowDuplicate) {
                 $this->assertNoDuplicate($first, $last, $data['birth_date']);
             }
@@ -138,7 +135,7 @@ class EmployeeOperationsService
             ]);
 
             return $employee;
-        }));
+        });
 
         $this->flushCache([$data['dept_no']]);
 
@@ -269,7 +266,7 @@ class EmployeeOperationsService
 
             $this->ops = [];
             $this->closeRows('dept_emp', $current, $date);
-            $this->closeRows('dept_manager', $managed, $date);
+            $this->endManagement($managed, $date, 'employee.transferred');
             $this->insert('dept_emp', ['emp_no' => $empNo, 'dept_no' => $deptNo, 'from_date' => $date, 'to_date' => self::CURRENT]);
 
             $endedManagement = $managed->pluck('dept_no')->values()->all();
@@ -426,7 +423,7 @@ class EmployeeOperationsService
             $this->closeRows('dept_emp', $departments, $date);
             $this->closeRows('titles', $titles, $date);
             $this->closeRows('salaries', $salaries, $date);
-            $this->closeRows('dept_manager', $managed, $date);
+            $this->endManagement($managed, $date, 'employee.terminated');
 
             $reason = $reason === null ? null : trim($reason);
             $result = [
@@ -485,7 +482,9 @@ class EmployeeOperationsService
             foreach (['titles', 'salaries', 'dept_manager'] as $table) {
                 $rows = $this->currentRows($table, $empNo);
                 if ($rows->isNotEmpty()) {
-                    $this->closeRows($table, $rows, $previousEnd);
+                    $table === 'dept_manager'
+                        ? $this->endManagement($rows, $previousEnd, 'employee.rehired')
+                        : $this->closeRows($table, $rows, $previousEnd);
                     $stray[$table] = $rows;
                 }
             }
@@ -630,7 +629,7 @@ class EmployeeOperationsService
      */
     public function undoLastChange(Employee $employee, int $entryId): string
     {
-        [$action, $departments] = DB::transaction(function () use ($employee, $entryId) {
+        $action = DB::transaction(function () use ($employee, $entryId) {
             $employee = $this->lock($employee);
             $empNo = $employee->emp_no;
 
@@ -643,12 +642,6 @@ class EmployeeOperationsService
             }
 
             $ops = $entry->changes['_undo']['ops'];
-            $departments = $this->currentDepartments($empNo);
-            foreach (array_reverse($ops) as [$op, $table, $key]) {
-                if (isset($key['dept_no'])) {
-                    $departments[] = $key['dept_no'];
-                }
-            }
 
             // Written first: the voided rows point at this entry.
             $undo = AuditLogger::log(ActivityLog::ACTION_CHANGE_UNDONE, ActivityLog::SUBJECT_EMPLOYEE, $empNo, array_filter([
@@ -664,10 +657,16 @@ class EmployeeOperationsService
                 $this->reverse($change, $undo->id);
             }
 
-            return [$entry->action, $departments];
+            $this->departments->logReopenedPeriods(
+                array_map(fn (array $change) => $change[2], array_filter($ops, fn (array $change) => $change[0] === 'close' && $change[1] === 'dept_manager')),
+                $entry->action,
+            );
+
+            return $entry->action;
         });
 
-        $this->flushCache(array_values(array_unique($departments)));
+        // An undo removes rows that figures of any scope may already contain.
+        $this->flushCache(null);
 
         return $action;
     }
@@ -748,41 +747,6 @@ class EmployeeOperationsService
     }
 
     /**
-     * Run $operation (a whole transaction) again when the employee number was taken
-     * meanwhile, or - when it is the outermost transaction - on a deadlock / lock
-     * wait timeout, with a short random pause.
-     *
-     * @template T
-     *
-     * @param  Closure(): T  $operation
-     * @return T
-     */
-    private function withRetries(Closure $operation): mixed
-    {
-        $outermost = DB::transactionLevel() === 0;
-
-        for ($attempt = 1; ; $attempt++) {
-            try {
-                return $operation();
-            } catch (UniqueConstraintViolationException $e) {
-                // Another writer took the number between our read and insert (e.g. an
-                // import inserting explicit numbers): try again with the new maximum.
-                $retry = true;
-            } catch (QueryException $e) {
-                // 1213 deadlock, 1205 lock wait timeout: the whole transaction was rolled
-                // back, which can only be repeated when it is not part of an outer one.
-                $retry = $outermost && in_array((int) ($e->errorInfo[1] ?? 0), [1205, 1213], true);
-            }
-
-            if (! $retry || $attempt >= self::HIRE_ATTEMPTS) {
-                throw $e;
-            }
-
-            usleep(random_int(5_000, 25_000) * $attempt);
-        }
-    }
-
-    /**
      * Current (to_date = 9999-01-01) rows of a history table, locked.
      */
     private function currentRows(string $table, int $empNo): Collection
@@ -799,6 +763,21 @@ class EmployeeOperationsService
             $key = $this->key($table, $row);
             $this->rows($table)->where($key)->where('to_date', self::CURRENT)->update(['to_date' => $date]);
             $this->ops[] = ['close', $table, $key, $date];
+        }
+    }
+
+    /**
+     * End management periods the way every other screen does, and remember it for an undo.
+     *
+     * @param  Collection<int, object>  $periods  current dept_manager rows, locked
+     * @param  string  $cause  the action that ended them
+     */
+    private function endManagement(Collection $periods, string $date, string $cause): void
+    {
+        $this->departments->endPeriods($periods, $date, $cause);
+
+        foreach ($periods as $period) {
+            $this->ops[] = ['close', 'dept_manager', $this->key('dept_manager', $period), $date];
         }
     }
 
@@ -899,8 +878,29 @@ class EmployeeOperationsService
             ! in_array($entry->action, self::UNDOABLE_ACTIONS, true) || ! $this->validUndoData($entry->changes['_undo'] ?? null, $empNo) => __('The last change cannot be undone.'),
             $entry->created_at->lt(now()->subHours(self::UNDO_HOURS)) => __('Changes can only be undone within :hours hours.', ['hours' => self::UNDO_HOURS]),
             ! hash_equals($entry->changes['_undo']['state'], $this->stateHash($empNo)) => __('The records of this employee were changed after the last change, so it cannot be undone any more.'),
+            $this->managementTakenOver($entry->changes['_undo']['ops']) => __('The department got another manager after this change, so it cannot be undone any more.'),
             default => null,
         };
+    }
+
+    /**
+     * Would reopening a management period of the operation overlap a period
+     * another employee started since? Their records are not part of the fingerprint.
+     *
+     * @param  array<int, array<int, mixed>>  $ops
+     */
+    private function managementTakenOver(array $ops): bool
+    {
+        foreach ($ops as $change) {
+            [$op, $table, $key] = $change;
+
+            if ($op === 'close' && $table === 'dept_manager'
+                && $this->rows('dept_manager')->where('dept_no', $key['dept_no'])->where('emp_no', '<>', $key['emp_no'])->where('from_date', '>=', $change[3])->exists()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -1095,9 +1095,9 @@ class EmployeeOperationsService
      * Clear the cached figures once the surrounding transaction (if any) has been
      * committed. A failing cache never fails the (already committed) operation.
      *
-     * @param  string[]  $departments
+     * @param  string[]|null  $departments  null: all of them
      */
-    private function flushCache(array $departments): void
+    private function flushCache(?array $departments): void
     {
         DB::afterCommit(function () use ($departments) {
             try {

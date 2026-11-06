@@ -17,10 +17,13 @@ use Illuminate\Validation\ValidationException;
  * to the audit log in the same transaction. Cached figures are cleared only
  * where they change: managers and department names are read live.
  *
- * dept_manager keeps one row per employee and department (primary key
- * emp_no + dept_no); the current manager has to_date = 9999-01-01. A change of
+ * dept_manager keeps one row per management period (an employee can manage a
+ * department again); the current manager has to_date = 9999-01-01. A change of
  * manager on date D ends the current period on D (to_date = D) and starts the
  * new one on D, like the periods in the imported dataset.
+ *
+ * A period ends in one place, {@see endPeriods()}, whether a department page or
+ * an HR operation (transfer, termination) ends it: same update, same audit entry.
  */
 class DepartmentManagementService
 {
@@ -71,8 +74,8 @@ class DepartmentManagementService
     public function deletionBlockedReason(Department $department): ?string
     {
         return match (true) {
-            DB::table('dept_emp')->where('dept_no', $department->dept_no)->exists() => __('The department has (or had) employees.'),
-            DB::table('dept_manager')->where('dept_no', $department->dept_no)->exists() => __('The department has (or had) managers.'),
+            HistoryRows::active(DB::table('dept_emp'))->where('dept_no', $department->dept_no)->exists() => __('The department has (or had) employees.'),
+            HistoryRows::active(DB::table('dept_manager'))->where('dept_no', $department->dept_no)->exists() => __('The department has (or had) managers.'),
             User::query()->where('dept_no', $department->dept_no)->exists() => __('Manager accounts are assigned to this department.'),
             default => null,
         };
@@ -105,10 +108,10 @@ class DepartmentManagementService
      * the current manager's period on that date.
      *
      * Rules: the employee is currently in the department and was already in it
-     * on $fromDate, is not the current manager, has no earlier management
-     * period in this department ({@see reappointmentBlockingPeriod()}), and
-     * $fromDate is after the current manager's start date and not before the
-     * end of the department's last ended period.
+     * on $fromDate, is not the current manager, and $fromDate is after the
+     * current manager's start date and not before the end of the department's
+     * last ended period. A former manager can manage the department again: a new
+     * period, the earlier one stays.
      *
      * @return array{emp_no: int, from_date: string, previous_emp_no: ?int}
      *
@@ -123,7 +126,7 @@ class DepartmentManagementService
             // Serializes manager changes of this department.
             Department::query()->whereKey($department->dept_no)->lockForUpdate()->first();
 
-            $membership = DB::table('dept_emp')
+            $membership = HistoryRows::active(DB::table('dept_emp'))
                 ->where('emp_no', $empNo)
                 ->where('dept_no', $department->dept_no)
                 ->where('to_date', self::CURRENT)
@@ -139,12 +142,6 @@ class DepartmentManagementService
                 $fail('emp_no', __('The employee already is the current manager.'));
             }
 
-            if (($earlier = $this->reappointmentBlockingPeriod($department->dept_no, $empNo)) !== null) {
-                $fail('emp_no', __('The employee already managed this department (:from - :to); the history keeps one period per employee and department.', [
-                    'from' => $earlier->from_date, 'to' => $earlier->to_date,
-                ]));
-            }
-
             if ($fromDate < $membership->from_date) {
                 $fail('from_date', __('The date cannot be before the employee joined the department (:date).', ['date' => $membership->from_date]));
             }
@@ -154,7 +151,7 @@ class DepartmentManagementService
             }
 
             // Periods must not overlap: a new one starts at the earliest when the last ended one ended.
-            $lastEnd = DB::table('dept_manager')
+            $lastEnd = HistoryRows::active(DB::table('dept_manager'))
                 ->where('dept_no', $department->dept_no)
                 ->where('to_date', '<>', self::CURRENT)
                 ->max('to_date');
@@ -162,8 +159,8 @@ class DepartmentManagementService
                 $fail('from_date', __('The date cannot be before the end of the previous manager\'s period (:date).', ['date' => $lastEnd]));
             }
 
-            if ($current !== null) {
-                $this->closeCurrentPeriods($department->dept_no, $fromDate);
+            foreach ($this->currentPeriods($department->dept_no) as $period) {
+                $this->closePeriod($period, $fromDate);
             }
 
             DB::table('dept_manager')->insert([
@@ -210,32 +207,49 @@ class DepartmentManagementService
                 $fail('to_date', __('The date must be after the start of the current manager\'s period (:date).', ['date' => $current->from_date]));
             }
 
-            $this->closeCurrentPeriods($department->dept_no, $toDate);
+            $this->endPeriods($this->currentPeriods($department->dept_no), $toDate);
 
-            $result = ['emp_no' => (int) $current->emp_no, 'from_date' => $current->from_date, 'to_date' => $toDate];
-
-            AuditLogger::log('department.manager_ended', ActivityLog::SUBJECT_DEPARTMENT, $department->dept_no, $result);
-
-            return $result;
+            return ['emp_no' => (int) $current->emp_no, 'from_date' => $current->from_date, 'to_date' => $toDate];
         });
     }
 
     /**
-     * The rule "a former manager cannot manage the same department again": the
-     * employee's latest earlier management period of the department, or null.
+     * End management periods on $date: the one code path and audit entry
+     * (`department.manager_ended`) for everything that ends a management. Call it in
+     * the transaction of the change; the caller has checked the date.
      *
-     * Needed while dept_manager's primary key is (emp_no, dept_no) - a second
-     * period would not fit. Once the key includes from_date this method can
-     * simply return null; the other rules (dates after the current and the last
-     * ended period) keep the history consistent.
+     * @param  Collection<int, object>  $periods  current dept_manager rows, locked
+     * @param  string|null  $cause  the action that ended them, when it was not this screen
      */
-    private function reappointmentBlockingPeriod(string $deptNo, int $empNo): ?object
+    public function endPeriods(Collection $periods, string $date, ?string $cause = null): void
     {
-        return DB::table('dept_manager')
-            ->where('emp_no', $empNo)
-            ->where('dept_no', $deptNo)
-            ->orderByDesc('from_date')
-            ->first();
+        foreach ($periods as $period) {
+            $this->closePeriod($period, $date);
+
+            AuditLogger::log('department.manager_ended', ActivityLog::SUBJECT_DEPARTMENT, $period->dept_no, array_filter([
+                'emp_no' => (int) $period->emp_no,
+                'from_date' => $period->from_date,
+                'to_date' => $date,
+                'cause' => $cause,
+            ]));
+        }
+    }
+
+    /**
+     * An undo reopened management periods ended by $cause: the counterpart of the
+     * `department.manager_ended` entry in the department's history.
+     *
+     * @param  array<int, array{emp_no: int, dept_no: string, from_date: string}>  $periods
+     */
+    public function logReopenedPeriods(array $periods, string $cause): void
+    {
+        foreach ($periods as $period) {
+            AuditLogger::log('department.manager_restored', ActivityLog::SUBJECT_DEPARTMENT, $period['dept_no'], [
+                'emp_no' => $period['emp_no'],
+                'from_date' => $period['from_date'],
+                'cause' => $cause,
+            ]);
+        }
     }
 
     /**
@@ -243,7 +257,7 @@ class DepartmentManagementService
      */
     private function currentManagerRow(string $deptNo): ?object
     {
-        return DB::table('dept_manager')
+        return HistoryRows::active(DB::table('dept_manager'))
             ->where('dept_no', $deptNo)
             ->where('to_date', self::CURRENT)
             ->orderByDesc('from_date')
@@ -251,10 +265,26 @@ class DepartmentManagementService
             ->first();
     }
 
-    private function closeCurrentPeriods(string $deptNo, string $date): void
+    /**
+     * Every current dept_manager row of a department, locked.
+     *
+     * @return Collection<int, object>
+     */
+    private function currentPeriods(string $deptNo): Collection
     {
-        DB::table('dept_manager')
+        return HistoryRows::active(DB::table('dept_manager'))
             ->where('dept_no', $deptNo)
+            ->where('to_date', self::CURRENT)
+            ->lockForUpdate()
+            ->get();
+    }
+
+    private function closePeriod(object $period, string $date): void
+    {
+        HistoryRows::active(DB::table('dept_manager'))
+            ->where('emp_no', $period->emp_no)
+            ->where('dept_no', $period->dept_no)
+            ->where('from_date', $period->from_date)
             ->where('to_date', self::CURRENT)
             ->update(['to_date' => $date]);
     }

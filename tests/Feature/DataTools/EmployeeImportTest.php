@@ -6,6 +6,7 @@ use App\Enums\Role;
 use App\Models\ActivityLog;
 use App\Models\Employee;
 use App\Services\EmployeeImportService;
+use App\Services\EmployeeNumberAllocator;
 use App\Support\EmployeeDataCache;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -187,7 +188,7 @@ class EmployeeImportTest extends TestCase
     public function test_allocation_reads_the_highest_number_with_a_locking_read(): void
     {
         DB::enableQueryLog();
-        DB::transaction(fn () => app(EmployeeImportService::class)->allocateEmployeeNumbers());
+        DB::transaction(fn () => app(EmployeeNumberAllocator::class)->next());
 
         $sql = collect(DB::getQueryLog())->pluck('query')->first(fn ($q) => str_contains($q, 'employees'));
         $this->assertStringContainsString('for update', strtolower($sql));
