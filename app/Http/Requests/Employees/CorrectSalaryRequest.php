@@ -11,6 +11,10 @@ class CorrectSalaryRequest extends EmployeeOperationRequest
      */
     public function rules(): array
     {
-        return ['salary' => $this->salaryRules()];
+        return [
+            'salary' => $this->salaryRules(),
+            'reason' => ['required', 'string', 'max:500'],
+            'confirm_unusual' => ['boolean'],
+        ];
     }
 }

@@ -22,6 +22,19 @@
 
         <form method="POST" action="{{ route('employees.store') }}" novalidate>
             @csrf
+            <input type="hidden" name="form_token" value="{{ old('form_token', $formToken) }}">
+            @error('confirm_duplicate')
+                <div class="alert alert-warning" role="alert">
+                    <i class="bi bi-people me-1"></i>{{ $message }}
+                    <div class="form-check mt-2">
+                        <input class="form-check-input" type="checkbox" name="confirm_duplicate" value="1" id="confirm_duplicate">
+                        <label class="form-check-label fw-semibold" for="confirm_duplicate">{{ __('This is a different person - hire anyway') }}</label>
+                    </div>
+                </div>
+            @enderror
+            @error('form_token')
+                <div class="alert alert-danger" role="alert">{{ __('The form has expired. Reload the page and try again.') }}</div>
+            @enderror
             <div class="row g-4">
                 <div class="col-lg-6">
                     <div class="card h-100">

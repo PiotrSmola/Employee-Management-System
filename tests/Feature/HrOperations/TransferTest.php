@@ -65,23 +65,39 @@ class TransferTest extends HrOperationsTestCase
         $this->assertSame([$this->sales->dept_no], $this->onlyEntry('employee.transferred')->changes['ended_management']);
     }
 
-    public function test_a_return_to_a_previous_department_is_refused(): void
+    public function test_a_return_to_a_previous_department_adds_a_new_period(): void
     {
         $employee = $this->currentEmployee($this->research, previousDepartment: $this->sales);
-        $before = $this->rows('dept_emp', $employee->emp_no);
+        $before = $this->rows('dept_emp', $employee->emp_no, ['dept_no', 'from_date', 'to_date']);
 
-        $this->get($this->profile($employee))->assertSee('previously held - not possible');
+        $this->get($this->profile($employee))->assertSee('return - worked here before');
 
-        $this->from($this->profile($employee))
-            ->post(route('employees.transfer', $employee->emp_no), ['dept_no' => $this->sales->dept_no, 'effective_date' => '2024-05-01'])
-            ->assertRedirect($this->profile($employee))
-            ->assertSessionHasErrorsIn('transfer', ['dept_no']);
+        $this->post(route('employees.transfer', $employee->emp_no), ['dept_no' => $this->sales->dept_no, 'effective_date' => '2024-05-01'])
+            ->assertSessionHasNoErrors()
+            ->assertSessionHas('status', 'Anna Nowak moves from Research to Sales on 01.05.2024.');
 
-        $message = session('errors')->getBag('transfer')->first('dept_no');
-        $this->assertStringContainsString('Anna Nowak already belonged to Sales', $message);
-        $this->assertStringContainsString('a return to a previous department cannot be recorded', $message);
-        $this->assertSame($before, $this->rows('dept_emp', $employee->emp_no));
-        $this->assertDatabaseCount('activity_log', 0);
+        $after = $this->rows('dept_emp', $employee->emp_no, ['dept_no', 'from_date', 'to_date']);
+        $this->assertCount(3, $after);
+        $this->assertSame($before[0], $after[0], 'The first Sales period is unchanged.');
+        $this->assertSame(['dept_no' => $this->research->dept_no, 'from_date' => $before[1]['from_date'], 'to_date' => '2024-05-01'], $after[1]);
+        $this->assertSame(['dept_no' => $this->sales->dept_no, 'from_date' => '2024-05-01', 'to_date' => self::CURRENT], $after[2]);
+        $this->assertTrue($this->onlyEntry('employee.transferred')->changes['returning']);
+
+        // The directory, the manager scope and the profile see the employee in Sales again.
+        $this->get(route('employees.show', $employee->emp_no))->assertSee('Sales');
+        $this->assertSame(1, \App\Queries\EmployeeSearchQuery::departmentMembership(DB::table('dept_emp as de_f'), $this->sales->dept_no)->count());
+        $this->assertSame(0, \App\Queries\EmployeeSearchQuery::departmentMembership(DB::table('dept_emp as de_f'), $this->research->dept_no)->count());
+    }
+
+    public function test_a_former_employee_belongs_to_the_department_of_the_latest_period(): void
+    {
+        $employee = $this->currentEmployee($this->research, previousDepartment: $this->sales);
+        $this->post(route('employees.transfer', $employee->emp_no), ['dept_no' => $this->sales->dept_no, 'effective_date' => '2024-05-01'])->assertSessionHasNoErrors();
+        $this->post(route('employees.terminate', $employee->emp_no), ['end_date' => '2025-01-31'])->assertSessionHasNoErrors();
+
+        $members = fn (Department $d) => \App\Queries\EmployeeSearchQuery::departmentMembership(DB::table('dept_emp as de_f'), $d->dept_no, 'former')->pluck('de_f.emp_no')->all();
+        $this->assertSame([$employee->emp_no], $members($this->sales));
+        $this->assertSame([], $members($this->research));
     }
 
     public function test_the_current_department_cannot_be_chosen(): void

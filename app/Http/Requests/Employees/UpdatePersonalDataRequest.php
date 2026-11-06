@@ -11,6 +11,10 @@ class UpdatePersonalDataRequest extends EmployeeOperationRequest
      */
     public function rules(): array
     {
-        return $this->personalRules();
+        return [
+            ...$this->personalRules(),
+            // EmployeeOperationsService::personalSnapshot() of the data the form showed.
+            'snapshot' => ['required', 'string', 'size:40'],
+        ];
     }
 }

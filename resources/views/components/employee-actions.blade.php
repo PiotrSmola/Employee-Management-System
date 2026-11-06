@@ -16,6 +16,7 @@
         'rehire' => 'rehireModal',
         'correctSalary' => 'correctSalaryModal',
         'correctTitle' => 'correctTitleModal',
+        'undo' => 'undoModal',
     ];
     $openModal = collect($modals)->first(fn ($modal, $bag) => $errors->getBag($bag)->any());
     // Old input only for the form that failed (the forms share field names).
@@ -24,6 +25,7 @@
     $deptName = fn (string $no) => $departmentNames[$no] ?? $no;
     $possible = fn (?string $min) => $min === null || $min <= $today;
     $hireMax = $minDates['hire'] !== null && $minDates['hire'] < $today ? $minDates['hire'] : $today;
+    $undoPresenter = new \App\Support\AuditLogPresenter($departmentNames->all());
 @endphp
 
 <div class="row mb-4">
@@ -59,7 +61,7 @@
                         <i class="bi bi-arrow-counterclockwise me-1"></i>{{ __('Rehire') }}
                     </button>
                 @endif
-                @if ($latestSalary || $latestTitle)
+                @if ($isCurrent && ($latestSalary || $latestTitle))
                     <div class="dropdown">
                         <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
                             <i class="bi bi-wrench-adjustable me-1"></i>{{ __('Corrections') }}
@@ -82,7 +84,17 @@
                         </ul>
                     </div>
                 @endif
+                @if ($undoable)
+                    <button type="button" class="btn btn-outline-warning ms-md-auto" data-bs-toggle="modal" data-bs-target="#undoModal">
+                        <i class="bi bi-arrow-counterclockwise me-1"></i>{{ __('Undo last change') }}
+                    </button>
+                @endif
             </div>
+            @if ($errors->getBag('undo')->any() && ! $undoable)
+                <div class="card-footer">
+                    @include('employees.partials.hr-errors', ['bag' => 'undo'])
+                </div>
+            @endif
         </div>
     </div>
 </div>
@@ -99,6 +111,7 @@
         <form method="POST" action="{{ route('employees.update', $employee->emp_no) }}" class="modal-content" novalidate>
             @csrf
             @method('PUT')
+            <input type="hidden" name="snapshot" value="{{ $personalSnapshot }}">
             <div class="modal-header">
                 <h5 class="modal-title" id="personalModalLabel"><i class="bi bi-pencil-square me-2"></i>{{ __('Edit personal data') }}</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{{ __('Close') }}"></button>
@@ -182,17 +195,18 @@
                             <option value="">{{ __('Choose a department...') }}</option>
                             @foreach ($departments as $department)
                                 @php($held = in_array($department->dept_no, $heldDepartments, true))
-                                <option value="{{ $department->dept_no }}" @selected($selectedDept === $department->dept_no) @disabled($held)>
+                                @php($isCurrentDept = in_array($department->dept_no, $currentDepartments, true))
+                                <option value="{{ $department->dept_no }}" @selected($selectedDept === $department->dept_no) @disabled($isCurrentDept)>
                                     {{ $department->dept_name }}
-                                    @if (in_array($department->dept_no, $currentDepartments, true))
+                                    @if ($isCurrentDept)
                                         ({{ __('current') }})
                                     @elseif ($held)
-                                        ({{ __('previously held - not possible') }})
+                                        ({{ __('return - worked here before') }})
                                     @endif
                                 </option>
                             @endforeach
                         </select>
-                        <div class="form-text">{{ __('The department history keeps one period per department, so a return to a department the employee belonged to before cannot be recorded.') }}</div>
+                        <div class="form-text">{{ __('A return to a department the employee belonged to before adds a new period; the earlier one stays unchanged.') }}</div>
                     </div>
                     @include('employees.partials.hr-date', ['bag' => 'transfer', 'field' => 'effective_date', 'label' => __('Effective date'), 'min' => $minDates['transfer']])
                 </div>
@@ -278,6 +292,13 @@
                         </div>
                     </div>
                     <p class="small text-body-secondary mb-3" id="hrSalaryPreview" aria-live="polite"></p>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input {{ $invalid('salary', 'confirm_unusual') }}" type="checkbox" name="confirm_unusual" value="1" id="hr_salary_confirm"
+                            @checked($old('salary', 'confirm_unusual'))>
+                        <label class="form-check-label small" for="hr_salary_confirm">
+                            {{ __('I confirm an unusual change (below :min % or above +:max % of the current salary)', ['min' => $rules::MIN_PERCENT, 'max' => $rules::MAX_PERCENT]) }}
+                        </label>
+                    </div>
                     @include('employees.partials.hr-date', ['bag' => 'salary', 'field' => 'effective_date', 'label' => __('Effective date'), 'min' => $minDates['salary']])
                 </div>
                 <div class="modal-footer">
@@ -348,12 +369,12 @@
                                 <option value="">{{ __('Choose a department...') }}</option>
                                 @foreach ($departments as $department)
                                     @php($held = in_array($department->dept_no, $heldDepartments, true))
-                                    <option value="{{ $department->dept_no }}" @selected($selectedDept === $department->dept_no) @disabled($held)>
-                                        {{ $department->dept_name }}@if ($held) ({{ __('previously held - not possible') }})@endif
+                                    <option value="{{ $department->dept_no }}" @selected($selectedDept === $department->dept_no)>
+                                        {{ $department->dept_name }}@if ($held) ({{ __('return - worked here before') }})@endif
                                     </option>
                                 @endforeach
                             </select>
-                            <div class="form-text">{{ __('The department history keeps one period per department, so departments the employee belonged to before cannot be chosen.') }}</div>
+                            <div class="form-text">{{ __('Any department can be chosen, also one the employee belonged to before.') }}</div>
                         </div>
                         <div class="col-sm-6">
                             <label for="hr_rehire_title" class="form-label fw-semibold">{{ __('Job title') }}</label>
@@ -379,7 +400,7 @@
     </div>
 @endif
 
-@if ($latestSalary)
+@if ($isCurrent && $latestSalary)
     {{-- Correct latest salary --}}
     <div class="modal fade" id="correctSalaryModal" tabindex="-1" aria-labelledby="correctSalaryModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
@@ -402,6 +423,16 @@
                     <label for="hr_correct_salary" class="form-label fw-semibold">{{ __('Correct amount (USD per year)') }}</label>
                     <input type="number" id="hr_correct_salary" name="salary" class="form-control {{ $invalid('correctSalary', 'salary') }}"
                         value="{{ $old('correctSalary', 'salary', $latestSalary->salary) }}" min="{{ $rules::MIN_SALARY }}" max="{{ $rules::MAX_SALARY }}" step="1" required>
+                    <label for="hr_correct_salary_reason" class="form-label fw-semibold mt-3">{{ __('Reason (required, kept in the audit log)') }}</label>
+                    <textarea id="hr_correct_salary_reason" name="reason" rows="2" maxlength="500" required
+                        class="form-control {{ $invalid('correctSalary', 'reason') }}">{{ $old('correctSalary', 'reason') }}</textarea>
+                    <div class="form-check mt-3">
+                        <input class="form-check-input {{ $invalid('correctSalary', 'confirm_unusual') }}" type="checkbox" name="confirm_unusual" value="1" id="hr_correct_confirm"
+                            @checked($old('correctSalary', 'confirm_unusual'))>
+                        <label class="form-check-label small" for="hr_correct_confirm">
+                            {{ __('I confirm an unusual change (below :min % or above +:max % of the recorded amount)', ['min' => $rules::MIN_PERCENT, 'max' => $rules::MAX_PERCENT]) }}
+                        </label>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">{{ __('Cancel') }}</button>
@@ -412,7 +443,7 @@
     </div>
 @endif
 
-@if ($latestTitle)
+@if ($isCurrent && $latestTitle)
     {{-- Correct latest title --}}
     <div class="modal fade" id="correctTitleModal" tabindex="-1" aria-labelledby="correctTitleModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
@@ -435,10 +466,49 @@
                     <label for="hr_correct_title" class="form-label fw-semibold">{{ __('Correct job title') }}</label>
                     <input type="text" id="hr_correct_title" name="title" list="hrTitleOptions" class="form-control {{ $invalid('correctTitle', 'title') }}"
                         value="{{ $old('correctTitle', 'title', $latestTitle->title) }}" maxlength="{{ $rules::TITLE_MAX }}" required autocomplete="off">
+                    <label for="hr_correct_title_reason" class="form-label fw-semibold mt-3">{{ __('Reason (required, kept in the audit log)') }}</label>
+                    <textarea id="hr_correct_title_reason" name="reason" rows="2" maxlength="500" required
+                        class="form-control {{ $invalid('correctTitle', 'reason') }}">{{ $old('correctTitle', 'reason') }}</textarea>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">{{ __('Cancel') }}</button>
                     <button type="submit" class="btn btn-warning"><i class="bi bi-wrench-adjustable me-1"></i>{{ __('Save correction') }}</button>
+                </div>
+            </form>
+        </div>
+    </div>
+@endif
+
+@if ($undoable)
+    {{-- Undo the last change --}}
+    <div class="modal fade" id="undoModal" tabindex="-1" aria-labelledby="undoModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+            <form method="POST" action="{{ route('employees.undo', $employee->emp_no) }}" class="modal-content" novalidate>
+                @csrf
+                <input type="hidden" name="entry_id" value="{{ $undoable->id }}">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="undoModalLabel"><i class="bi bi-arrow-counterclockwise me-2"></i>{{ __('Undo last change') }}</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{{ __('Close') }}"></button>
+                </div>
+                <div class="modal-body">
+                    @include('employees.partials.hr-errors', ['bag' => 'undo'])
+                    <p>
+                        <span class="badge role-badge {{ $undoPresenter::actionClass($undoable->action) }}">{{ $undoPresenter::actionLabel($undoable->action) }}</span>
+                        <span class="small text-body-secondary ms-1">
+                            {{ $undoable->created_at->format('d.m.Y H:i') }}, {{ $undoable->user?->name ?? __('System') }}
+                        </span>
+                    </p>
+                    @include('audit-log.partials.changes', ['changes' => $undoable->changes, 'presenter' => $undoPresenter])
+                    <p class="small text-body-secondary mt-3 mb-0">
+                        {{ __('Undoing restores the records exactly as they were before this change: closed records are reopened and the records it added are removed. Only the most recent change can be undone, within :hours hours and only while nothing else was changed for this employee. The undo is recorded in the audit log.', ['hours' => \App\Services\EmployeeOperationsService::UNDO_HOURS]) }}
+                        @if ($undoable->action === 'employee.hired')
+                            <strong class="text-danger">{{ __('Undoing a hire removes the employee record.') }}</strong>
+                        @endif
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">{{ __('Cancel') }}</button>
+                    <button type="submit" class="btn btn-warning"><i class="bi bi-arrow-counterclockwise me-1"></i>{{ __('Undo') }}</button>
                 </div>
             </form>
         </div>

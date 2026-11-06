@@ -13,7 +13,7 @@ class CorrectionTest extends HrOperationsTestCase
         $before = $this->rows('salaries', $employee->emp_no);
         $this->primeCache([$department->dept_no]);
 
-        $this->put(route('employees.salary.correct', $employee->emp_no), ['salary' => '61000'])
+        $this->put(route('employees.salary.correct', $employee->emp_no), ['salary' => '61000', 'reason' => 'Typo in the contract'])
             ->assertRedirect($this->profile($employee))
             ->assertSessionHas('status', 'The latest salary of Anna Nowak has been corrected.');
 
@@ -27,6 +27,7 @@ class CorrectionTest extends HrOperationsTestCase
             'after' => ['salary' => 61000],
             'from_date' => self::CURRENT_SALARY_FROM,
             'to_date' => self::CURRENT,
+            'reason' => 'Typo in the contract',
         ], $this->onlyEntry('employee.salary_corrected')->changes);
         $this->assertCacheFlushed([$department->dept_no]);
     }
@@ -35,7 +36,7 @@ class CorrectionTest extends HrOperationsTestCase
     {
         $employee = $this->currentEmployee(title: 'Enginer');
 
-        $this->put(route('employees.title.correct', $employee->emp_no), ['title' => 'Engineer'])
+        $this->put(route('employees.title.correct', $employee->emp_no), ['title' => 'Engineer', 'reason' => 'Spelling'])
             ->assertSessionHas('status', 'The latest job title of Anna Nowak has been corrected.');
 
         $this->assertSame([['title' => 'Engineer', 'from_date' => self::HIRED, 'to_date' => self::CURRENT]],
@@ -45,6 +46,7 @@ class CorrectionTest extends HrOperationsTestCase
             'after' => ['title' => 'Engineer'],
             'from_date' => self::HIRED,
             'to_date' => self::CURRENT,
+            'reason' => 'Spelling',
         ], $this->onlyEntry('employee.title_corrected')->changes);
     }
 
@@ -52,42 +54,61 @@ class CorrectionTest extends HrOperationsTestCase
     {
         $employee = $this->currentEmployee(title: 'senior engineer');
 
-        $this->put(route('employees.title.correct', $employee->emp_no), ['title' => 'Senior Engineer'])->assertSessionHasNoErrors();
+        $this->put(route('employees.title.correct', $employee->emp_no), ['title' => 'Senior Engineer', 'reason' => 'Case'])->assertSessionHasNoErrors();
 
         $this->assertSame('Senior Engineer', $this->current('titles', $employee->emp_no)->title);
     }
 
-    public function test_former_employees_latest_rows_can_be_corrected_too(): void
+    public function test_former_employees_cannot_be_corrected(): void
     {
         $employee = $this->formerEmployee(Department::factory()->create());
 
-        $this->put(route('employees.salary.correct', $employee->emp_no), ['salary' => '51000'])->assertSessionHasNoErrors();
+        $this->put(route('employees.salary.correct', $employee->emp_no), ['salary' => '51000', 'reason' => 'x'])
+            ->assertSessionHasErrorsIn('correctSalary', ['salary' => 'Corrections are only possible for current employees.']);
+        $this->put(route('employees.title.correct', $employee->emp_no), ['title' => 'Senior Staff', 'reason' => 'x'])
+            ->assertSessionHasErrorsIn('correctTitle', ['title' => 'Corrections are only possible for current employees.']);
 
-        $rows = $this->rows('salaries', $employee->emp_no);
-        $this->assertSame(['salary' => 51000, 'to_date' => '2000-06-30'], ['salary' => end($rows)['salary'], 'to_date' => end($rows)['to_date']]);
+        $this->get($this->profile($employee))->assertDontSee('id="correctSalaryModal"', false);
+    }
+
+    public function test_a_reason_is_required(): void
+    {
+        $employee = $this->currentEmployee(title: 'Enginer', salary: 60000);
+
+        $this->put(route('employees.salary.correct', $employee->emp_no), ['salary' => '61000'])
+            ->assertSessionHasErrorsIn('correctSalary', ['reason']);
+        $this->put(route('employees.title.correct', $employee->emp_no), ['title' => 'Engineer', 'reason' => str_repeat('r', 501)])
+            ->assertSessionHasErrorsIn('correctTitle', ['reason']);
+
+        $this->assertDatabaseCount('activity_log', 0);
+    }
+
+    public function test_an_unusual_correction_needs_a_confirmation(): void
+    {
+        $employee = $this->currentEmployee(salary: 60000);
+        $url = route('employees.salary.correct', $employee->emp_no);
+
+        $this->put($url, ['salary' => '600000', 'reason' => 'One zero missing'])
+            ->assertSessionHasErrorsIn('correctSalary', ['confirm_unusual']);
+        $this->put($url, ['salary' => '25000', 'reason' => 'Typo'])
+            ->assertSessionHasErrorsIn('correctSalary', ['confirm_unusual']);
+        $this->assertSame(60000, $this->current('salaries', $employee->emp_no)->salary);
+
+        $this->put($url, ['salary' => '600000', 'reason' => 'Really', 'confirm_unusual' => '1'])->assertSessionHasNoErrors();
+        $this->assertSame(600000, $this->current('salaries', $employee->emp_no)->salary);
     }
 
     public function test_unchanged_or_invalid_corrections_are_rejected(): void
     {
         $employee = $this->currentEmployee(title: 'Engineer', salary: 60000);
 
-        $this->put(route('employees.salary.correct', $employee->emp_no), ['salary' => '60000'])
+        $this->put(route('employees.salary.correct', $employee->emp_no), ['salary' => '60000', 'reason' => 'x'])
             ->assertSessionHasErrorsIn('correctSalary', ['salary' => 'The amount is unchanged.']);
-        $this->put(route('employees.salary.correct', $employee->emp_no), ['salary' => '0'])
+        $this->put(route('employees.salary.correct', $employee->emp_no), ['salary' => '0', 'reason' => 'x'])
             ->assertSessionHasErrorsIn('correctSalary', ['salary']);
-        $this->put(route('employees.title.correct', $employee->emp_no), ['title' => 'Engineer'])
+        $this->put(route('employees.title.correct', $employee->emp_no), ['title' => 'Engineer', 'reason' => 'x'])
             ->assertSessionHasErrorsIn('correctTitle', ['title' => 'The job title is unchanged.']);
 
         $this->assertDatabaseCount('activity_log', 0);
-    }
-
-    public function test_an_employee_without_history_has_nothing_to_correct(): void
-    {
-        $employee = \App\Models\Employee::factory()->create(['first_name' => 'Ola', 'last_name' => 'Nowa']);
-
-        $this->put(route('employees.salary.correct', $employee->emp_no), ['salary' => '1000'])
-            ->assertSessionHasErrorsIn('correctSalary', ['salary' => 'Ola Nowa has no salary history.']);
-        $this->put(route('employees.title.correct', $employee->emp_no), ['title' => 'Staff'])
-            ->assertSessionHasErrorsIn('correctTitle', ['title' => 'Ola Nowa has no job title history.']);
     }
 }

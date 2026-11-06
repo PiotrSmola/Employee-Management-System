@@ -76,6 +76,21 @@ final class EmploymentRules
         return $before === 0 ? null : round(($after - $before) / $before * 100, 2);
     }
 
+    /**
+     * Is the change from $before to $after outside the usual range (MIN_PERCENT to MAX_PERCENT)?
+     */
+    public static function isUnusualChange(int $before, int $after): bool
+    {
+        if ($before === 0) {
+            return false;
+        }
+
+        // Compared unrounded: 29,999 from 60,000 is -50.0017 %, i.e. beyond -50 %.
+        $percent = ($after - $before) / $before * 100;
+
+        return $percent < self::MIN_PERCENT || $percent > self::MAX_PERCENT;
+    }
+
     public static function dayAfter(string $date): string
     {
         return CarbonImmutable::parse($date)->addDay()->toDateString();

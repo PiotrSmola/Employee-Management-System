@@ -10,15 +10,20 @@ use App\Http\Requests\Employees\HireEmployeeRequest;
 use App\Http\Requests\Employees\RehireEmployeeRequest;
 use App\Http\Requests\Employees\TerminateEmployeeRequest;
 use App\Http\Requests\Employees\TransferEmployeeRequest;
+use App\Http\Requests\Employees\UndoChangeRequest;
 use App\Http\Requests\Employees\UpdatePersonalDataRequest;
 use App\Models\Department;
 use App\Models\Employee;
 use App\Services\EmployeeOperationsService;
+use App\Support\AuditLogPresenter;
 use App\Support\EmploymentRules;
 use Closure;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
+use Throwable;
 
 /**
  * HR operations (routes/web/hr-operations.php, every route behind
@@ -40,6 +45,7 @@ class EmployeeOperationsController extends Controller
             'departments' => Department::query()->orderBy('dept_name')->get(['dept_no', 'dept_name']),
             'titleOptions' => $this->operations->titleOptions(),
             'today' => EmploymentRules::today(),
+            'formToken' => (string) Str::uuid(),
         ]);
     }
 
@@ -47,7 +53,27 @@ class EmployeeOperationsController extends Controller
     {
         $this->authorize('create', Employee::class);
 
-        $employee = $this->run('default', route('employees.create'), fn () => $this->operations->hire($request->validated()));
+        // The form's one-time token: a second submit (double click, reload) does not hire twice.
+        $tokenKey = 'hire-form:'.$request->validated('form_token');
+        if (! Cache::add($tokenKey, 'pending', now()->addDay())) {
+            $hired = Cache::get($tokenKey);
+
+            return is_numeric($hired)
+                ? redirect()->route('employees.show', (int) $hired)->with('status', __('This form was already submitted - employee no. :number was hired with it.', ['number' => $hired]))
+                : redirect()->route('employees.create')->with('error', __('This form is already being submitted. Check the directory before trying again.'));
+        }
+
+        try {
+            $employee = $this->run('default', route('employees.create'), fn () => $this->operations->hire(
+                $request->validated(),
+                $request->boolean('confirm_duplicate'),
+            ));
+        } catch (Throwable $e) {
+            Cache::forget($tokenKey);
+
+            throw $e;
+        }
+        Cache::put($tokenKey, $employee->emp_no, now()->addDay());
 
         return redirect()->route('employees.show', $employee->emp_no)->with('status', __(
             ':name has been hired (employee no. :number).',
@@ -59,7 +85,11 @@ class EmployeeOperationsController extends Controller
     {
         $employee = $this->employee($emp_no);
 
-        $changes = $this->run('personal', $this->profileUrl($employee), fn () => $this->operations->updatePersonalData($employee, $request->validated()));
+        $changes = $this->run('personal', $this->profileUrl($employee), fn () => $this->operations->updatePersonalData(
+            $employee,
+            $request->safe()->only(EmployeeOperationsService::PERSONAL_FIELDS),
+            $request->validated('snapshot'),
+        ));
 
         return $this->backToProfile($employee, $changes === []
             ? __('Nothing to save - the personal data is unchanged.')
@@ -113,11 +143,12 @@ class EmployeeOperationsController extends Controller
             $data['mode'] === 'amount' ? (int) $data['salary'] : null,
             $data['mode'] === 'percent' ? (float) $data['percent'] : null,
             $data['effective_date'],
+            $request->boolean('confirm_unusual'),
         ));
 
         return $this->backToProfile($employee, __('The salary of :name changes from :before to :after on :date.', [
             'name' => $this->name($employee),
-            'before' => number_format($result['before']),
+            'before' => $result['before'] === null ? '-' : number_format($result['before']),
             'after' => number_format($result['after']),
             'date' => EmploymentRules::display($data['effective_date']),
         ]));
@@ -155,7 +186,12 @@ class EmployeeOperationsController extends Controller
     {
         $employee = $this->employee($emp_no);
 
-        $this->run('correctSalary', $this->profileUrl($employee), fn () => $this->operations->correctLatestSalary($employee, (int) $request->validated('salary')));
+        $this->run('correctSalary', $this->profileUrl($employee), fn () => $this->operations->correctLatestSalary(
+            $employee,
+            (int) $request->validated('salary'),
+            $request->validated('reason'),
+            $request->boolean('confirm_unusual'),
+        ));
 
         return $this->backToProfile($employee, __('The latest salary of :name has been corrected.', ['name' => $this->name($employee)]));
     }
@@ -164,9 +200,29 @@ class EmployeeOperationsController extends Controller
     {
         $employee = $this->employee($emp_no);
 
-        $this->run('correctTitle', $this->profileUrl($employee), fn () => $this->operations->correctLatestTitle($employee, $request->validated('title')));
+        $this->run('correctTitle', $this->profileUrl($employee), fn () => $this->operations->correctLatestTitle(
+            $employee,
+            $request->validated('title'),
+            $request->validated('reason'),
+        ));
 
         return $this->backToProfile($employee, __('The latest job title of :name has been corrected.', ['name' => $this->name($employee)]));
+    }
+
+    public function undo(UndoChangeRequest $request, int $emp_no): RedirectResponse
+    {
+        $employee = $this->employee($emp_no);
+
+        $result = $this->run('undo', $this->profileUrl($employee), fn () => $this->operations->undoLastChange($employee, (int) $request->validated('entry_id')));
+
+        if ($result['employee_deleted']) {
+            return redirect()->route('employees.index')->with('status', __('The hire of :name has been undone; the employee record was removed.', ['name' => $this->name($employee)]));
+        }
+
+        return $this->backToProfile($employee, __('The last change of :name (:action) has been undone.', [
+            'name' => $this->name($employee),
+            'action' => mb_strtolower(AuditLogPresenter::actionLabel($result['action'])),
+        ]));
     }
 
     private function employee(int $empNo): Employee

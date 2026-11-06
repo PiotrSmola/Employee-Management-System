@@ -23,6 +23,7 @@ class ChangeSalaryRequest extends EmployeeOperationRequest
             'percent' => ['exclude_unless:mode,percent', 'required', 'numeric',
                 'between:'.EmploymentRules::MIN_PERCENT.','.EmploymentRules::MAX_PERCENT, 'not_in:0'],
             'effective_date' => $this->dateRules(),
+            'confirm_unusual' => ['boolean'],
         ];
     }
 

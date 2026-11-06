@@ -69,12 +69,19 @@ abstract class HrOperationsTestCase extends TestCase
     /**
      * The only audit entry with $action (fails when there is none or more than one).
      */
+    /**
+     * The only audit entry with $action (fails when there is none or more than one);
+     * `changes` without the internal undo data.
+     */
     protected function onlyEntry(string $action): ActivityLog
     {
         $entries = ActivityLog::where('action', $action)->get();
         $this->assertCount(1, $entries, "Expected exactly one {$action} entry.");
 
-        return $entries->first();
+        $entry = $entries->first();
+        $entry->setAttribute('changes', $this->withoutUndo($entry->changes));
+
+        return $entry;
     }
 
     /**
@@ -85,7 +92,7 @@ abstract class HrOperationsTestCase extends TestCase
     protected function primeCache(array $departments): void
     {
         foreach (EmployeeDataCache::keys($departments) as $key) {
-            Cache::put($key, 'cached');
+            Cache::put($key, ['cached']);
         }
     }
 
@@ -107,6 +114,19 @@ abstract class HrOperationsTestCase extends TestCase
         foreach ($departments as $deptNo) {
             $this->assertTrue(Cache::has(EmployeeDataCache::departmentStats($deptNo)), "Cache of {$deptNo} should be kept.");
         }
+    }
+
+    /**
+     * The audit `changes` without the internal undo data.
+     *
+     * @param  array<string, mixed>|null  $changes
+     * @return array<string, mixed>|null
+     */
+    protected function withoutUndo(?array $changes): ?array
+    {
+        unset($changes['_undo']);
+
+        return $changes;
     }
 
     protected function profile(Employee $employee): string

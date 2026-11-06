@@ -9,6 +9,7 @@ use App\Services\EmployeeNumberAllocator;
 use App\Services\EmployeeOperationsService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 class HireEmployeeTest extends HrOperationsTestCase
@@ -36,6 +37,7 @@ class HireEmployeeTest extends HrOperationsTestCase
             'dept_no' => $this->department->dept_no,
             'title' => 'Engineer',
             'salary' => '65000',
+            'form_token' => (string) Str::uuid(),
             ...$overrides,
         ];
     }
@@ -178,7 +180,7 @@ class HireEmployeeTest extends HrOperationsTestCase
         $this->assertSame(1, DB::table('activity_log')->where('action', 'employee.hired')->count());
     }
 
-    public function test_after_three_collisions_the_error_is_reported(): void
+    public function test_after_five_collisions_the_error_is_reported(): void
     {
         $taken = $this->currentEmployee();
         $this->app->instance(EmployeeNumberAllocator::class, new class($taken->emp_no) extends EmployeeNumberAllocator

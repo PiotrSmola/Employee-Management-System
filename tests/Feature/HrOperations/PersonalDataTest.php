@@ -4,6 +4,7 @@ namespace Tests\Feature\HrOperations;
 
 use App\Models\Department;
 use App\Models\Employee;
+use App\Services\EmployeeOperationsService;
 use Carbon\CarbonImmutable;
 
 class PersonalDataTest extends HrOperationsTestCase
@@ -19,6 +20,7 @@ class PersonalDataTest extends HrOperationsTestCase
             'gender' => $employee->gender,
             'birth_date' => $employee->birth_date,
             'hire_date' => $employee->hire_date,
+            'snapshot' => EmployeeOperationsService::personalSnapshot($employee),
             ...$overrides,
         ];
     }
@@ -111,7 +113,7 @@ class PersonalDataTest extends HrOperationsTestCase
     public function test_unknown_employee_is_404(): void
     {
         $this->put(route('employees.update', 999999), [
-            'first_name' => 'A', 'last_name' => 'B', 'gender' => 'M', 'birth_date' => '1970-01-01', 'hire_date' => '2000-01-01',
+            'first_name' => 'A', 'last_name' => 'B', 'gender' => 'M', 'birth_date' => '1970-01-01', 'hire_date' => '2000-01-01', 'snapshot' => str_repeat('a', 40),
         ])->assertNotFound();
     }
 }

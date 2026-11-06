@@ -7,15 +7,20 @@ use App\Models\Department;
 use App\Models\Employee;
 use App\Support\EmployeeDataCache;
 use App\Support\EmploymentRules;
+use Closure;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 /**
  * HR operations on employees: hire, edit personal data, transfer, title and
- * salary changes, termination, rehire and corrections of the latest salary /
- * title row (docs/HR_OPERATIONS.md).
+ * salary changes, termination, rehire, corrections of the latest salary /
+ * title row and undoing the last change (docs/HR_OPERATIONS.md).
  *
  * History is never deleted: a change closes the current row (to_date = the
  * effective date) and opens a new one (from_date = the effective date,
@@ -27,7 +32,8 @@ use Illuminate\Validation\ValidationException;
  *    date checks below see the committed state;
  *  - checks the business rules that depend on the stored history and throws a
  *    ValidationException (field => message) when one is broken;
- *  - writes an `employee.*` audit entry in the same transaction;
+ *  - writes an `employee.*` audit entry in the same transaction; the entry keeps
+ *    the row changes under `_undo` (see undoLastChange());
  *  - clears the cached dashboard / filter figures of the affected departments
  *    after the commit (EmployeeDataCache::flush()).
  *
@@ -39,8 +45,11 @@ class EmployeeOperationsService
 {
     public const CURRENT = EmploymentRules::CURRENT;
 
-    /** Attempts of a hire when the chosen employee number was taken meanwhile. */
-    public const HIRE_ATTEMPTS = 3;
+    /** Attempts of a hire when the employee number was taken meanwhile or the transaction deadlocked. */
+    public const HIRE_ATTEMPTS = 5;
+
+    /** How long the last change of an employee can be undone. */
+    public const UNDO_HOURS = 24;
 
     /** Personal data fields (employees table). */
     public const PERSONAL_FIELDS = ['first_name', 'last_name', 'gender', 'birth_date', 'hire_date'];
@@ -52,6 +61,25 @@ class EmployeeOperationsService
         'change' => 'employee.title_changed',
     ];
 
+    /** Actions undoLastChange() can reverse. */
+    public const UNDOABLE_ACTIONS = [
+        'employee.hired', 'employee.updated', 'employee.transferred', 'employee.promoted',
+        'employee.demoted', 'employee.title_changed', 'employee.salary_changed', 'employee.terminated',
+        'employee.rehired', 'employee.salary_corrected', 'employee.title_corrected',
+    ];
+
+    /** Primary key columns of the tables an operation writes. */
+    private const KEYS = [
+        'employees' => ['emp_no'],
+        'dept_emp' => ['emp_no', 'dept_no', 'from_date'],
+        'dept_manager' => ['emp_no', 'dept_no', 'from_date'],
+        'titles' => ['emp_no', 'title', 'from_date'],
+        'salaries' => ['emp_no', 'from_date'],
+    ];
+
+    /** Row changes of the running operation (written to the audit entry as `_undo`). */
+    private array $ops = [];
+
     public function __construct(private readonly EmployeeNumberAllocator $numbers)
     {
     }
@@ -59,81 +87,114 @@ class EmployeeOperationsService
     /**
      * Hire a new employee: employees + dept_emp + titles + salaries rows starting on the hire date.
      *
+     * An employee with the same name and birth date already existing is reported
+     * (field `confirm_duplicate`) unless $allowDuplicate.
+     *
      * @param  array{first_name: string, last_name: string, gender: string, birth_date: string, hire_date: string, dept_no: string, title: string, salary: int|string}  $data
      *
      * @throws ValidationException
      */
-    public function hire(array $data): Employee
+    public function hire(array $data, bool $allowDuplicate = false): Employee
     {
         $this->assertNotInFuture('hire_date', $data['hire_date']);
         $this->assertPlausibleAge($data['birth_date'], $data['hire_date']);
         $salary = $this->assertSalary('salary', (int) $data['salary']);
         $title = trim($data['title']);
+        $first = trim($data['first_name']);
+        $last = trim($data['last_name']);
 
-        for ($attempt = 1; ; $attempt++) {
-            try {
-                $employee = DB::transaction(function () use ($data, $title, $salary) {
-                    $employee = Employee::create([
-                        'emp_no' => $this->numbers->next(),
-                        'first_name' => trim($data['first_name']),
-                        'last_name' => trim($data['last_name']),
-                        'gender' => $data['gender'],
-                        'birth_date' => $data['birth_date'],
-                        'hire_date' => $data['hire_date'],
-                    ]);
-
-                    $this->openEmployment($employee->emp_no, $data['dept_no'], $title, $salary, $data['hire_date']);
-
-                    AuditLogger::log('employee.hired', ActivityLog::SUBJECT_EMPLOYEE, $employee->emp_no, [
-                        'after' => AuditLogger::values([
-                            ...$employee->only(self::PERSONAL_FIELDS),
-                            'dept_no' => $data['dept_no'],
-                            'title' => $title,
-                            'salary' => $salary,
-                        ]),
-                    ]);
-
-                    return $employee;
-                });
-
-                break;
-            } catch (UniqueConstraintViolationException $e) {
-                // Another writer took the number between our read and insert (e.g. an import
-                // inserting explicit numbers): try again with the new maximum.
-                if ($attempt >= self::HIRE_ATTEMPTS) {
-                    throw $e;
-                }
+        $employee = $this->withRetries(fn () => DB::transaction(function () use ($data, $title, $salary, $first, $last, $allowDuplicate) {
+            if (! $allowDuplicate) {
+                $this->assertNoDuplicate($first, $last, $data['birth_date']);
             }
-        }
 
-        EmployeeDataCache::flush([$data['dept_no']]);
+            $this->ops = [];
+            $employee = Employee::create([
+                'emp_no' => $this->numbers->next(),
+                'first_name' => $first,
+                'last_name' => $last,
+                'gender' => $data['gender'],
+                'birth_date' => $data['birth_date'],
+                'hire_date' => $data['hire_date'],
+            ]);
+            $this->ops[] = ['insert', 'employees', ['emp_no' => $employee->emp_no]];
+
+            $this->openEmployment($employee->emp_no, $data['dept_no'], $title, $salary, $data['hire_date']);
+
+            $this->log('employee.hired', $employee->emp_no, [
+                'after' => AuditLogger::values([
+                    ...$employee->only(self::PERSONAL_FIELDS),
+                    'dept_no' => $data['dept_no'],
+                    'title' => $title,
+                    'salary' => $salary,
+                ]),
+            ]);
+
+            return $employee;
+        }));
+
+        $this->flushCache([$data['dept_no']]);
 
         return $employee;
     }
 
     /**
-     * Change name, gender, birth date and hire date. The hire date may not lie
-     * after the first history row and the age on the hire date must be plausible.
+     * Existing employees with this name and birth date (the hire form's duplicate warning).
+     *
+     * @return Collection<int, Employee>
+     */
+    public function duplicates(string $firstName, string $lastName, string $birthDate): Collection
+    {
+        return Employee::query()
+            ->where('first_name', trim($firstName))
+            ->where('last_name', trim($lastName))
+            ->where('birth_date', $birthDate)
+            ->orderBy('emp_no')
+            ->limit(5)
+            ->get(['emp_no', 'first_name', 'last_name', 'birth_date', 'hire_date']);
+    }
+
+    /**
+     * Change name, gender, birth date and hire date.
+     *
+     * The hire date may not lie after the first history row and the age on the
+     * hire date must be plausible - both only checked when the birth or hire date
+     * is changed, so a name correction is never blocked by quirks of old data.
+     * $snapshot (personalSnapshot() of the data the form was built from) rejects
+     * an edit made on data someone else changed meanwhile.
      *
      * @param  array{first_name: string, last_name: string, gender: string, birth_date: string, hire_date: string}  $data
      * @return array{before?: array<string, mixed>, after?: array<string, mixed>} the logged diff ([] = nothing changed)
      *
      * @throws ValidationException
      */
-    public function updatePersonalData(Employee $employee, array $data): array
+    public function updatePersonalData(Employee $employee, array $data, ?string $snapshot = null): array
     {
-        $result = DB::transaction(function () use ($employee, $data) {
+        [$changes, $departments] = DB::transaction(function () use ($employee, $data, $snapshot) {
             $employee = $this->lock($employee);
 
-            $this->assertNotInFuture('hire_date', $data['hire_date']);
-            $firstHistoryDate = $this->firstHistoryDate($employee->emp_no);
-            if ($firstHistoryDate !== null && $data['hire_date'] > $firstHistoryDate) {
-                throw ValidationException::withMessages(['hire_date' => __(
-                    'The hire date cannot be after the start of the employment history (:date).',
-                    ['date' => EmploymentRules::display($firstHistoryDate)],
+            if ($snapshot !== null && ! hash_equals(self::personalSnapshot($employee), $snapshot)) {
+                throw ValidationException::withMessages(['snapshot' => __(
+                    'The personal data was changed by someone else in the meantime. Reload the page and enter your change again.',
                 )]);
             }
-            $this->assertPlausibleAge($data['birth_date'], $data['hire_date']);
+
+            $hireChanged = $data['hire_date'] !== $employee->hire_date;
+            $birthChanged = $data['birth_date'] !== $employee->birth_date;
+
+            if ($hireChanged) {
+                $this->assertNotInFuture('hire_date', $data['hire_date']);
+                $firstHistoryDate = $this->firstHistoryDate($employee->emp_no);
+                if ($firstHistoryDate !== null && $data['hire_date'] > $firstHistoryDate) {
+                    throw ValidationException::withMessages(['hire_date' => __(
+                        'The hire date cannot be after the start of the employment history (:date).',
+                        ['date' => EmploymentRules::display($firstHistoryDate)],
+                    )]);
+                }
+            }
+            if ($hireChanged || $birthChanged) {
+                $this->assertPlausibleAge($data['birth_date'], $data['hire_date']);
+            }
 
             $before = $employee->only(self::PERSONAL_FIELDS);
             $employee->fill([
@@ -146,29 +207,35 @@ class EmployeeOperationsService
 
             $changes = AuditLogger::diff($before, $employee->only(self::PERSONAL_FIELDS));
             if ($changes !== []) {
-                AuditLogger::log('employee.updated', ActivityLog::SUBJECT_EMPLOYEE, $employee->emp_no, $changes);
+                $this->ops = [['set', 'employees', ['emp_no' => $employee->emp_no], $changes['before'], $changes['after']]];
+                $this->log('employee.updated', $employee->emp_no, $changes);
             }
 
             return [$changes, $this->currentDepartments($employee->emp_no)];
         });
 
-        [$changes, $departments] = $result;
         if ($changes !== []) {
-            EmployeeDataCache::flush($departments);
+            $this->flushCache($departments);
         }
 
         return $changes;
     }
 
     /**
+     * Fingerprint of the personal data, sent with the edit form (optimistic locking).
+     */
+    public static function personalSnapshot(Employee $employee): string
+    {
+        return sha1(json_encode(array_map('strval', $employee->only(['emp_no', ...self::PERSONAL_FIELDS]))));
+    }
+
+    /**
      * Move a current employee to $deptNo from $date on. A current management of
-     * the department being left ends on the same date.
+     * the department being left ends on the same date. A department the employee
+     * belonged to before can be chosen again (a new dept_emp period is added;
+     * primary key emp_no + dept_no + from_date).
      *
-     * A department the employee already belonged to cannot be chosen: dept_emp
-     * has the primary key (emp_no, dept_no), so it holds one period per
-     * employee and department, and re-opening the old row would rewrite history.
-     *
-     * @return array{from: string[], to: string, ended_management: string[]}
+     * @return array{from: string[], to: string, ended_management: string[], returning: bool}
      *
      * @throws ValidationException
      */
@@ -187,30 +254,30 @@ class EmployeeOperationsService
             if (in_array($deptNo, $from, true)) {
                 throw ValidationException::withMessages(['dept_no' => __(':name already works in this department.', ['name' => $this->name($employee)])]);
             }
-            $this->assertNotPreviouslyHeld($employee, $deptNo);
 
             $managed = $this->currentRows('dept_manager', $empNo)->whereIn('dept_no', $from);
             $this->assertEffectiveDate('effective_date', $date, $this->transferMinimum($current, $managed));
+            $this->assertPeriodIsFree('effective_date', $empNo, $deptNo, $date);
+            $returning = DB::table('dept_emp')->where('emp_no', $empNo)->where('dept_no', $deptNo)->exists();
 
-            DB::table('dept_emp')->where('emp_no', $empNo)->where('to_date', self::CURRENT)->update(['to_date' => $date]);
-            if ($managed->isNotEmpty()) {
-                DB::table('dept_manager')->where('emp_no', $empNo)->where('to_date', self::CURRENT)
-                    ->whereIn('dept_no', $managed->pluck('dept_no'))->update(['to_date' => $date]);
-            }
-            DB::table('dept_emp')->insert(['emp_no' => $empNo, 'dept_no' => $deptNo, 'from_date' => $date, 'to_date' => self::CURRENT]);
+            $this->ops = [];
+            $this->closeRows('dept_emp', $current, $date);
+            $this->closeRows('dept_manager', $managed, $date);
+            $this->insert('dept_emp', ['emp_no' => $empNo, 'dept_no' => $deptNo, 'from_date' => $date, 'to_date' => self::CURRENT]);
 
             $endedManagement = $managed->pluck('dept_no')->values()->all();
-            AuditLogger::log('employee.transferred', ActivityLog::SUBJECT_EMPLOYEE, $empNo, array_filter([
+            $this->log('employee.transferred', $empNo, array_filter([
                 'before' => ['dept_no' => implode(', ', $from)],
                 'after' => ['dept_no' => $deptNo],
                 'effective_date' => $date,
+                'returning' => $returning ?: null,
                 'ended_management' => $endedManagement,
             ]));
 
-            return ['from' => $from, 'to' => $deptNo, 'ended_management' => $endedManagement];
+            return ['from' => $from, 'to' => $deptNo, 'ended_management' => $endedManagement, 'returning' => $returning];
         });
 
-        EmployeeDataCache::flush(array_values(array_unique([...$result['from'], $deptNo])));
+        $this->flushCache(array_values(array_unique([...$result['from'], $deptNo])));
 
         return $result;
     }
@@ -218,6 +285,7 @@ class EmployeeOperationsService
     /**
      * New job title from $date on. $kind (promotion / demotion / change) only
      * selects the audit action (employee.promoted / .demoted / .title_changed).
+     * A current employee without a current title row simply gets one.
      *
      * @throws ValidationException
      */
@@ -231,21 +299,21 @@ class EmployeeOperationsService
             $empNo = $employee->emp_no;
             $departments = $this->requireCurrentEmployment($employee, 'title');
 
-            $current = $this->currentRows('titles', $empNo)->sortByDesc('from_date')->first();
-            if ($current === null) {
-                throw ValidationException::withMessages(['title' => __(':name has no current job title.', ['name' => $this->name($employee)])]);
-            }
-            if (mb_strtolower($current->title) === mb_strtolower($title)) {
+            $currentRows = $this->currentRows('titles', $empNo);
+            $current = $currentRows->sortByDesc('from_date')->first();
+            if ($current !== null && mb_strtolower($current->title) === mb_strtolower($title)) {
                 throw ValidationException::withMessages(['title' => __('This is already the current job title.')]);
             }
 
-            $this->assertEffectiveDate('effective_date', $date, $this->nextFrom('titles', $empNo), __('the start of the current job title'));
+            $this->assertEffectiveDate('effective_date', $date, $this->nextFrom('titles', $empNo) ?? $employee->hire_date,
+                $current === null ? __('the latest job title record') : __('the start of the current job title'));
 
-            DB::table('titles')->where('emp_no', $empNo)->where('to_date', self::CURRENT)->update(['to_date' => $date]);
-            DB::table('titles')->insert(['emp_no' => $empNo, 'title' => $title, 'from_date' => $date, 'to_date' => self::CURRENT]);
+            $this->ops = [];
+            $this->closeRows('titles', $currentRows, $date);
+            $this->insert('titles', ['emp_no' => $empNo, 'title' => $title, 'from_date' => $date, 'to_date' => self::CURRENT]);
 
-            AuditLogger::log($action, ActivityLog::SUBJECT_EMPLOYEE, $empNo, [
-                'before' => ['title' => $current->title],
+            $this->log($action, $empNo, [
+                'before' => ['title' => $current?->title],
                 'after' => ['title' => $title],
                 'effective_date' => $date,
             ]);
@@ -253,56 +321,67 @@ class EmployeeOperationsService
             return $departments;
         });
 
-        EmployeeDataCache::flush($departments);
+        $this->flushCache($departments);
     }
 
     /**
      * New salary from $date on: an amount, or the current salary changed by $percent.
      *
-     * @return array{before: int, after: int}
+     * A change outside -50 % to +100 % of the current salary needs $confirmUnusual
+     * (field `confirm_unusual`). A current employee without a current salary row
+     * gets one (amount only).
+     *
+     * @return array{before: ?int, after: int}
      *
      * @throws ValidationException
      */
-    public function changeSalary(Employee $employee, ?int $amount, ?float $percent, string $date): array
+    public function changeSalary(Employee $employee, ?int $amount, ?float $percent, string $date, bool $confirmUnusual = false): array
     {
         if (($amount === null) === ($percent === null)) {
             throw ValidationException::withMessages(['salary' => __('Enter either a new amount or a percentage.')]);
         }
 
-        [$result, $departments] = DB::transaction(function () use ($employee, $amount, $percent, $date) {
+        [$result, $departments] = DB::transaction(function () use ($employee, $amount, $percent, $date, $confirmUnusual) {
             $employee = $this->lock($employee);
             $empNo = $employee->emp_no;
             $departments = $this->requireCurrentEmployment($employee, 'salary');
 
-            $current = $this->currentRows('salaries', $empNo)->sortByDesc('from_date')->first();
-            if ($current === null) {
-                throw ValidationException::withMessages(['salary' => __(':name has no current salary.', ['name' => $this->name($employee)])]);
+            $currentRows = $this->currentRows('salaries', $empNo);
+            $current = $currentRows->sortByDesc('from_date')->first();
+            if ($current === null && $amount === null) {
+                throw ValidationException::withMessages(['percent' => __(':name has no current salary - enter the new amount.', ['name' => $this->name($employee)])]);
             }
 
-            $before = (int) $current->salary;
+            $before = $current === null ? null : (int) $current->salary;
             $field = $amount === null ? 'percent' : 'salary';
             $after = $this->assertSalary($field, $amount ?? EmploymentRules::applyPercent($before, $percent));
             if ($after === $before) {
                 throw ValidationException::withMessages([$field => __('The new salary is the same as the current one.')]);
             }
+            if ($before !== null && ! $confirmUnusual) {
+                $this->assertUsualChange($before, $after);
+            }
 
-            $this->assertEffectiveDate('effective_date', $date, $this->nextFrom('salaries', $empNo), __('the start of the current salary'));
+            $this->assertEffectiveDate('effective_date', $date, $this->nextFrom('salaries', $empNo) ?? $employee->hire_date,
+                $current === null ? __('the latest salary record') : __('the start of the current salary'));
 
-            DB::table('salaries')->where('emp_no', $empNo)->where('to_date', self::CURRENT)->update(['to_date' => $date]);
-            DB::table('salaries')->insert(['emp_no' => $empNo, 'salary' => $after, 'from_date' => $date, 'to_date' => self::CURRENT]);
+            $this->ops = [];
+            $this->closeRows('salaries', $currentRows, $date);
+            $this->insert('salaries', ['emp_no' => $empNo, 'salary' => $after, 'from_date' => $date, 'to_date' => self::CURRENT]);
 
-            AuditLogger::log('employee.salary_changed', ActivityLog::SUBJECT_EMPLOYEE, $empNo, array_filter([
+            $this->log('employee.salary_changed', $empNo, array_filter([
                 'before' => ['salary' => $before],
                 'after' => ['salary' => $after],
                 'effective_date' => $date,
-                'change_percent' => EmploymentRules::percentChange($before, $after),
+                'change_percent' => $before === null ? null : EmploymentRules::percentChange($before, $after),
                 'requested_percent' => $percent,
+                'confirmed_unusual' => $confirmUnusual && $before !== null && EmploymentRules::isUnusualChange($before, $after) ? true : null,
             ], fn ($value) => $value !== null));
 
             return [['before' => $before, 'after' => $after], $departments];
         });
 
-        EmployeeDataCache::flush($departments);
+        $this->flushCache($departments);
 
         return $result;
     }
@@ -331,9 +410,11 @@ class EmployeeOperationsService
 
             $this->assertEffectiveDate('end_date', $date, $this->terminationMinimum($departments, $titles, $salaries, $managed));
 
-            foreach (['dept_emp', 'titles', 'salaries', 'dept_manager'] as $table) {
-                DB::table($table)->where('emp_no', $empNo)->where('to_date', self::CURRENT)->update(['to_date' => $date]);
-            }
+            $this->ops = [];
+            $this->closeRows('dept_emp', $departments, $date);
+            $this->closeRows('titles', $titles, $date);
+            $this->closeRows('salaries', $salaries, $date);
+            $this->closeRows('dept_manager', $managed, $date);
 
             $reason = $reason === null ? null : trim($reason);
             $result = [
@@ -341,7 +422,7 @@ class EmployeeOperationsService
                 'ended_management' => $managed->pluck('dept_no')->values()->all(),
             ];
 
-            AuditLogger::log('employee.terminated', ActivityLog::SUBJECT_EMPLOYEE, $empNo, array_filter([
+            $this->log('employee.terminated', $empNo, array_filter([
                 'before' => array_filter([
                     'dept_no' => implode(', ', $result['departments']),
                     'title' => $titles->pluck('title')->implode(', ') ?: null,
@@ -355,16 +436,17 @@ class EmployeeOperationsService
             return $result;
         });
 
-        EmployeeDataCache::flush(array_values(array_unique([...$result['departments'], ...$result['ended_management']])));
+        $this->flushCache(array_values(array_unique([...$result['departments'], ...$result['ended_management']])));
 
         return $result;
     }
 
     /**
      * Employ a former employee again from $date on (after the end of the last
-     * employment) with a new department, title and salary. The hire date stays the
-     * original one. A department the employee belonged to before cannot be chosen
-     * (see transfer()).
+     * employment) with a department (also a previous one), title and salary. The
+     * hire date stays the original one. Stray current title, salary or
+     * management rows of the former employee (old data) are closed on the end of
+     * the last employment first.
      *
      * @throws ValidationException
      */
@@ -380,42 +462,52 @@ class EmployeeOperationsService
             if ($this->currentRows('dept_emp', $empNo)->isNotEmpty()) {
                 throw ValidationException::withMessages(['dept_no' => __(':name is currently employed.', ['name' => $this->name($employee)])]);
             }
-            if ($this->currentRows('titles', $empNo)->isNotEmpty() || $this->currentRows('salaries', $empNo)->isNotEmpty()) {
-                throw ValidationException::withMessages(['dept_no' => __(
-                    ':name still has a current job title or salary without a department. Correct the data before rehiring.',
-                    ['name' => $this->name($employee)],
-                )]);
-            }
-            $this->assertNotPreviouslyHeld($employee, $deptNo);
 
             $previousEnd = $this->employmentEnd($empNo);
             $minimum = $previousEnd === null ? $employee->hire_date : EmploymentRules::dayAfter($previousEnd);
             $this->assertEffectiveDate('effective_date', $date, $minimum, $previousEnd === null ? __('the hire date') : __('the end of the last employment'));
+            $this->assertPeriodIsFree('effective_date', $empNo, $deptNo, $date);
+
+            $this->ops = [];
+            $stray = [];
+            foreach (['titles', 'salaries', 'dept_manager'] as $table) {
+                $rows = $this->currentRows($table, $empNo);
+                if ($rows->isNotEmpty()) {
+                    $this->closeRows($table, $rows, $previousEnd);
+                    $stray[$table] = $rows;
+                }
+            }
 
             $this->openEmployment($empNo, $deptNo, $title, $salary, $date);
 
-            AuditLogger::log('employee.rehired', ActivityLog::SUBJECT_EMPLOYEE, $empNo, array_filter([
+            $this->log('employee.rehired', $empNo, array_filter([
                 'after' => ['dept_no' => $deptNo, 'title' => $title, 'salary' => $salary],
                 'effective_date' => $date,
                 'previous_end_date' => $previousEnd,
-            ], fn ($value) => $value !== null));
+                'returning' => DB::table('dept_emp')->where('emp_no', $empNo)->where('dept_no', $deptNo)->count() > 1 ?: null,
+                'closed_stray_records' => array_keys($stray),
+                'ended_management' => isset($stray['dept_manager']) ? $stray['dept_manager']->pluck('dept_no')->values()->all() : [],
+            ], fn ($value) => $value !== null && $value !== []));
         });
 
-        EmployeeDataCache::flush([$deptNo]);
+        $this->flushCache([$deptNo]);
     }
 
     /**
      * Fix a typo in the amount of the most recent salary row (dates unchanged).
+     * Only for current employees; a $reason is required and logged, a change
+     * outside -50 % to +100 % needs $confirmUnusual.
      *
      * @throws ValidationException
      */
-    public function correctLatestSalary(Employee $employee, int $salary): void
+    public function correctLatestSalary(Employee $employee, int $salary, string $reason, bool $confirmUnusual = false): void
     {
         $salary = $this->assertSalary('salary', $salary);
 
-        $departments = DB::transaction(function () use ($employee, $salary) {
+        $departments = DB::transaction(function () use ($employee, $salary, $reason, $confirmUnusual) {
             $employee = $this->lock($employee);
             $empNo = $employee->emp_no;
+            $departments = $this->requireCurrentEmployment($employee, 'salary', __('Corrections are only possible for current employees.'));
 
             $latest = DB::table('salaries')->where('emp_no', $empNo)->orderByDesc('from_date')->lockForUpdate()->first();
             if ($latest === null) {
@@ -424,34 +516,42 @@ class EmployeeOperationsService
             if ((int) $latest->salary === $salary) {
                 throw ValidationException::withMessages(['salary' => __('The amount is unchanged.')]);
             }
+            if (! $confirmUnusual) {
+                $this->assertUsualChange((int) $latest->salary, $salary);
+            }
 
-            DB::table('salaries')->where('emp_no', $empNo)->where('from_date', $latest->from_date)->update(['salary' => $salary]);
+            $key = ['emp_no' => $empNo, 'from_date' => $latest->from_date];
+            DB::table('salaries')->where($key)->update(['salary' => $salary]);
+            $this->ops = [['set', 'salaries', $key, ['salary' => (int) $latest->salary], ['salary' => $salary]]];
 
-            AuditLogger::log('employee.salary_corrected', ActivityLog::SUBJECT_EMPLOYEE, $empNo, [
+            $this->log('employee.salary_corrected', $empNo, [
                 'before' => ['salary' => (int) $latest->salary],
                 'after' => ['salary' => $salary],
                 'from_date' => $latest->from_date,
                 'to_date' => $latest->to_date,
+                'reason' => trim($reason),
             ]);
 
-            return $this->currentDepartments($empNo);
+            return $departments;
         });
 
-        EmployeeDataCache::flush($departments);
+        $this->flushCache($departments);
     }
 
     /**
-     * Fix the wording of the most recent job title row (dates unchanged).
+     * Fix the wording of the most recent job title row (dates unchanged). Only for
+     * current employees; a $reason is required and logged.
      *
      * @throws ValidationException
      */
-    public function correctLatestTitle(Employee $employee, string $title): void
+    public function correctLatestTitle(Employee $employee, string $title, string $reason): void
     {
         $title = trim($title);
 
-        $departments = DB::transaction(function () use ($employee, $title) {
+        $departments = DB::transaction(function () use ($employee, $title, $reason) {
             $employee = $this->lock($employee);
             $empNo = $employee->emp_no;
+            $departments = $this->requireCurrentEmployment($employee, 'title', __('Corrections are only possible for current employees.'));
 
             $latest = $this->latestTitle($empNo, lock: true);
             if ($latest === null) {
@@ -468,18 +568,83 @@ class EmployeeOperationsService
 
             DB::table('titles')->where('emp_no', $empNo)->where('from_date', $latest->from_date)
                 ->where('title', $latest->title)->update(['title' => $title]);
+            $this->ops = [['set', 'titles', ['emp_no' => $empNo, 'title' => $title, 'from_date' => $latest->from_date], ['title' => $latest->title], ['title' => $title]]];
 
-            AuditLogger::log('employee.title_corrected', ActivityLog::SUBJECT_EMPLOYEE, $empNo, [
+            $this->log('employee.title_corrected', $empNo, [
                 'before' => ['title' => $latest->title],
                 'after' => ['title' => $title],
                 'from_date' => $latest->from_date,
                 'to_date' => $latest->to_date,
+                'reason' => trim($reason),
             ]);
 
-            return $this->currentDepartments($empNo);
+            return $departments;
         });
 
-        EmployeeDataCache::flush($departments);
+        $this->flushCache($departments);
+    }
+
+    /**
+     * The audit entry undoLastChange() would reverse for this employee, or null.
+     */
+    public function undoableEntry(Employee $employee): ?ActivityLog
+    {
+        $entry = $this->latestEntry($employee->emp_no);
+
+        return $entry !== null && $this->undoBlockedReason($entry, $employee->emp_no) === null ? $entry : null;
+    }
+
+    /**
+     * Reverse the most recent HR operation on the employee ($entryId, the entry
+     * the user saw): only within UNDO_HOURS and only if nothing changed the
+     * employee's records since. Closed rows are re-opened, rows the operation
+     * added are deleted, corrected values restored. Logged as employee.change_undone.
+     *
+     * @return array{action: string, employee_deleted: bool}
+     *
+     * @throws ValidationException
+     */
+    public function undoLastChange(Employee $employee, int $entryId): array
+    {
+        [$result, $departments] = DB::transaction(function () use ($employee, $entryId) {
+            $employee = $this->lock($employee);
+            $empNo = $employee->emp_no;
+
+            $entry = $this->latestEntry($empNo);
+            if ($entry === null || $entry->id !== $entryId) {
+                throw ValidationException::withMessages(['undo' => __('Only the most recent change of this employee can be undone, and it is not the one shown. Reload the page.')]);
+            }
+            if (($reason = $this->undoBlockedReason($entry, $empNo)) !== null) {
+                throw ValidationException::withMessages(['undo' => $reason]);
+            }
+
+            $ops = $entry->changes['_undo']['ops'];
+            $departments = $this->currentDepartments($empNo);
+            foreach (array_reverse($ops) as [$op, $table, $key]) {
+                if (isset($key['dept_no'])) {
+                    $departments[] = $key['dept_no'];
+                }
+            }
+
+            foreach (array_reverse($ops) as $change) {
+                $this->reverse($change);
+            }
+
+            $deleted = ! DB::table('employees')->where('emp_no', $empNo)->exists();
+            AuditLogger::log('employee.change_undone', ActivityLog::SUBJECT_EMPLOYEE, $empNo, [
+                'undone_entry_id' => $entry->id,
+                'undone_action' => $entry->action,
+                'undone_at' => $entry->created_at->format('Y-m-d H:i:s'),
+                'before' => $entry->changes['after'] ?? null,
+                'after' => $entry->changes['before'] ?? null,
+            ]);
+
+            return [['action' => $entry->action, 'employee_deleted' => $deleted], $departments];
+        });
+
+        $this->flushCache(array_values(array_unique($departments)));
+
+        return $result;
     }
 
     /**
@@ -517,10 +682,12 @@ class EmployeeOperationsService
             'titleOptions' => $this->titleOptions(),
             'employmentEnd' => $employmentEnd,
             'today' => EmploymentRules::today(),
+            'personalSnapshot' => self::personalSnapshot($employee),
+            'undoable' => $this->undoableEntry($employee),
             'minDates' => [
                 'transfer' => $isCurrent ? $this->transferMinimum($current, $managedHere) : null,
-                'title' => $this->nextFrom('titles', $empNo),
-                'salary' => $this->nextFrom('salaries', $empNo),
+                'title' => $this->nextFrom('titles', $empNo) ?? $employee->hire_date,
+                'salary' => $this->nextFrom('salaries', $empNo) ?? $employee->hire_date,
                 'terminate' => $isCurrent ? $this->terminationMinimum($current, $titles, $salaries, $managed) : null,
                 'rehire' => $isCurrent ? null : ($employmentEnd === null ? $employee->hire_date : EmploymentRules::dayAfter($employmentEnd)),
                 'hire' => $this->firstHistoryDate($empNo),
@@ -529,13 +696,15 @@ class EmployeeOperationsService
     }
 
     /**
-     * Distinct job titles of the dataset (loose index scan on titles(title, to_date)).
+     * Distinct job titles of the dataset (loose index scan on titles(title, to_date)),
+     * cached until EmployeeDataCache::flush().
      *
      * @return string[]
      */
     public function titleOptions(): array
     {
-        return DB::table('titles')->distinct()->orderBy('title')->pluck('title')->all();
+        return Cache::remember(EmployeeDataCache::JOB_TITLES, 3600,
+            fn () => DB::table('titles')->distinct()->orderBy('title')->pluck('title')->all());
     }
 
     // ------------------------------------------------------------------ internals
@@ -546,11 +715,80 @@ class EmployeeOperationsService
     }
 
     /**
+     * Run $operation (a whole transaction) again when the employee number was taken
+     * meanwhile, or - when it is the outermost transaction - on a deadlock / lock
+     * wait timeout, with a short random pause.
+     *
+     * @template T
+     *
+     * @param  Closure(): T  $operation
+     * @return T
+     */
+    private function withRetries(Closure $operation): mixed
+    {
+        $outermost = DB::transactionLevel() === 0;
+
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                return $operation();
+            } catch (UniqueConstraintViolationException $e) {
+                // Another writer took the number between our read and insert (e.g. an
+                // import inserting explicit numbers): try again with the new maximum.
+                $retry = true;
+            } catch (QueryException $e) {
+                // 1213 deadlock, 1205 lock wait timeout: the whole transaction was rolled
+                // back, which can only be repeated when it is not part of an outer one.
+                $retry = $outermost && in_array((int) ($e->errorInfo[1] ?? 0), [1205, 1213], true);
+            }
+
+            if (! $retry || $attempt >= self::HIRE_ATTEMPTS) {
+                throw $e;
+            }
+
+            usleep(random_int(5_000, 25_000) * $attempt);
+        }
+    }
+
+    /**
      * Current (to_date = 9999-01-01) rows of a history table, locked.
      */
     private function currentRows(string $table, int $empNo): Collection
     {
         return DB::table($table)->where('emp_no', $empNo)->where('to_date', self::CURRENT)->lockForUpdate()->get();
+    }
+
+    /**
+     * Set to_date = $date on $rows (current rows of $table) and remember it for an undo.
+     */
+    private function closeRows(string $table, Collection $rows, string $date): void
+    {
+        foreach ($rows as $row) {
+            $key = $this->key($table, $row);
+            DB::table($table)->where($key)->where('to_date', self::CURRENT)->update(['to_date' => $date]);
+            $this->ops[] = ['close', $table, $key, $date];
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function insert(string $table, array $row): void
+    {
+        DB::table($table)->insert($row);
+        $this->ops[] = ['insert', $table, $this->key($table, (object) $row)];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function key(string $table, object $row): array
+    {
+        $key = [];
+        foreach (self::KEYS[$table] as $column) {
+            $key[$column] = $row->{$column};
+        }
+
+        return $key;
     }
 
     /**
@@ -566,12 +804,12 @@ class EmployeeOperationsService
      *
      * @throws ValidationException
      */
-    private function requireCurrentEmployment(Employee $employee, string $field): array
+    private function requireCurrentEmployment(Employee $employee, string $field, ?string $message = null): array
     {
         $departments = $this->currentRows('dept_emp', $employee->emp_no)->pluck('dept_no')->all();
 
         if ($departments === []) {
-            throw ValidationException::withMessages([$field => $this->notEmployedMessage($employee)]);
+            throw ValidationException::withMessages([$field => $message ?? $this->notEmployedMessage($employee)]);
         }
 
         return $departments;
@@ -579,9 +817,80 @@ class EmployeeOperationsService
 
     private function openEmployment(int $empNo, string $deptNo, string $title, int $salary, string $from): void
     {
-        DB::table('dept_emp')->insert(['emp_no' => $empNo, 'dept_no' => $deptNo, 'from_date' => $from, 'to_date' => self::CURRENT]);
-        DB::table('titles')->insert(['emp_no' => $empNo, 'title' => $title, 'from_date' => $from, 'to_date' => self::CURRENT]);
-        DB::table('salaries')->insert(['emp_no' => $empNo, 'salary' => $salary, 'from_date' => $from, 'to_date' => self::CURRENT]);
+        $this->insert('dept_emp', ['emp_no' => $empNo, 'dept_no' => $deptNo, 'from_date' => $from, 'to_date' => self::CURRENT]);
+        $this->insert('titles', ['emp_no' => $empNo, 'title' => $title, 'from_date' => $from, 'to_date' => self::CURRENT]);
+        $this->insert('salaries', ['emp_no' => $empNo, 'salary' => $salary, 'from_date' => $from, 'to_date' => self::CURRENT]);
+    }
+
+    /**
+     * Write the audit entry of the running operation, with its row changes and a
+     * fingerprint of the employee's records afterwards (for undoLastChange()).
+     *
+     * @param  array<string, mixed>  $changes
+     */
+    private function log(string $action, int $empNo, array $changes): void
+    {
+        $changes['_undo'] = ['ops' => $this->ops, 'state' => $this->stateHash($empNo)];
+        $this->ops = [];
+
+        AuditLogger::log($action, ActivityLog::SUBJECT_EMPLOYEE, $empNo, $changes);
+    }
+
+    /**
+     * Fingerprint of everything stored about the employee (employees row and all history rows).
+     */
+    private function stateHash(int $empNo): string
+    {
+        $state = ['employees' => (array) DB::table('employees')->where('emp_no', $empNo)->first()];
+        foreach (self::KEYS as $table => $columns) {
+            if ($table !== 'employees') {
+                $state[$table] = DB::table($table)->where('emp_no', $empNo)->orderBy('from_date')->orderBy($columns[1])
+                    ->get()->map(fn ($row) => array_map('strval', (array) $row))->all();
+            }
+        }
+
+        return sha1(json_encode($state));
+    }
+
+    private function latestEntry(int $empNo): ?ActivityLog
+    {
+        return ActivityLog::forSubject(ActivityLog::SUBJECT_EMPLOYEE, $empNo)
+            ->where('action', 'like', 'employee.%')
+            ->latestFirst()
+            ->first();
+    }
+
+    private function undoBlockedReason(ActivityLog $entry, int $empNo): ?string
+    {
+        return match (true) {
+            ! in_array($entry->action, self::UNDOABLE_ACTIONS, true) || ! isset($entry->changes['_undo']['ops'], $entry->changes['_undo']['state']) => __('The last change cannot be undone.'),
+            $entry->created_at->lt(now()->subHours(self::UNDO_HOURS)) => __('Changes can only be undone within :hours hours.', ['hours' => self::UNDO_HOURS]),
+            ! hash_equals($entry->changes['_undo']['state'], $this->stateHash($empNo)) => __('The records of this employee were changed after the last change, so it cannot be undone any more.'),
+            default => null,
+        };
+    }
+
+    /**
+     * Reverse one recorded row change; it must hit exactly one row.
+     *
+     * @param  array<int, mixed>  $change
+     *
+     * @throws ValidationException
+     */
+    private function reverse(array $change): void
+    {
+        [$op, $table, $key] = $change;
+        $query = DB::table($table)->where($key);
+
+        $affected = match ($op) {
+            'close' => $query->where('to_date', $change[3])->update(['to_date' => self::CURRENT]),
+            'insert' => $query->delete(),
+            'set' => $query->update($change[3]),
+        };
+
+        if ($affected !== 1) {
+            throw ValidationException::withMessages(['undo' => __('The records of this employee do not match the change any more, so it cannot be undone.')]);
+        }
     }
 
     /**
@@ -625,7 +934,7 @@ class EmployeeOperationsService
     }
 
     /**
-     * Latest date of the (closed) history - the end of the last employment.
+     * Latest date of the history - the end of the last employment.
      */
     private function employmentEnd(int $empNo): ?string
     {
@@ -648,22 +957,46 @@ class EmployeeOperationsService
     }
 
     /**
+     * Clear the cached figures once the surrounding transaction (if any) has been
+     * committed. A failing cache never fails the (already committed) operation.
+     *
+     * @param  string[]  $departments
+     */
+    private function flushCache(array $departments): void
+    {
+        DB::afterCommit(function () use ($departments) {
+            try {
+                EmployeeDataCache::flush($departments);
+            } catch (Throwable $e) {
+                Log::warning('Could not clear the cached employee figures.', ['departments' => $departments, 'exception' => $e]);
+            }
+        });
+    }
+
+    /**
      * @throws ValidationException
      */
-    private function assertNotPreviouslyHeld(Employee $employee, string $deptNo): void
+    private function assertNoDuplicate(string $firstName, string $lastName, string $birthDate): void
     {
-        $previous = DB::table('dept_emp')->where('emp_no', $employee->emp_no)->where('dept_no', $deptNo)->first();
+        $duplicates = $this->duplicates($firstName, $lastName, $birthDate);
 
-        if ($previous !== null) {
-            throw ValidationException::withMessages(['dept_no' => __(
-                ':name already belonged to :department (:from - :to). The department history keeps one period per employee and department, so a return to a previous department cannot be recorded. Choose another department.',
-                [
-                    'name' => $this->name($employee),
-                    'department' => Department::query()->whereKey($deptNo)->value('dept_name') ?? $deptNo,
-                    'from' => EmploymentRules::display($previous->from_date),
-                    'to' => EmploymentRules::display($previous->to_date),
-                ],
+        if ($duplicates->isNotEmpty()) {
+            throw ValidationException::withMessages(['confirm_duplicate' => __(
+                'An employee with the same name and birth date already exists (employee no. :numbers). Check that this is not the same person, then confirm to hire anyway.',
+                ['numbers' => $duplicates->pluck('emp_no')->implode(', ')],
             )]);
+        }
+    }
+
+    /**
+     * A new period of $deptNo cannot start on the day an existing one did (primary key).
+     *
+     * @throws ValidationException
+     */
+    private function assertPeriodIsFree(string $field, int $empNo, string $deptNo, string $date): void
+    {
+        if (DB::table('dept_emp')->where(['emp_no' => $empNo, 'dept_no' => $deptNo, 'from_date' => $date])->exists()) {
+            throw ValidationException::withMessages([$field => __('A period in this department already starts on this date.')]);
         }
     }
 
@@ -703,6 +1036,23 @@ class EmployeeOperationsService
             throw ValidationException::withMessages(['birth_date' => __(
                 'The employee must be between :min and :max years old on the hire date.',
                 ['min' => EmploymentRules::MIN_AGE_AT_HIRE, 'max' => EmploymentRules::MAX_AGE_AT_HIRE],
+            )]);
+        }
+    }
+
+    /**
+     * @throws ValidationException
+     */
+    private function assertUsualChange(int $before, int $after): void
+    {
+        if (EmploymentRules::isUnusualChange($before, $after)) {
+            throw ValidationException::withMessages(['confirm_unusual' => __(
+                'This changes the salary by :percent %, outside the usual :min % to +:max %. Tick "I confirm an unusual change" to save it.',
+                [
+                    'percent' => (EmploymentRules::percentChange($before, $after) > 0 ? '+' : '').EmploymentRules::percentChange($before, $after),
+                    'min' => EmploymentRules::MIN_PERCENT,
+                    'max' => EmploymentRules::MAX_PERCENT,
+                ],
             )]);
         }
     }

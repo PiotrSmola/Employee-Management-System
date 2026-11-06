@@ -24,6 +24,7 @@ Route::middleware('can:'.Ability::MANAGE_EMPLOYEES)->group(function () {
         Route::post('/rehire', [EmployeeOperationsController::class, 'rehire'])->name('rehire');
         Route::put('/salary/latest', [EmployeeOperationsController::class, 'correctSalary'])->name('salary.correct');
         Route::put('/title/latest', [EmployeeOperationsController::class, 'correctTitle'])->name('title.correct');
+        Route::post('/undo', [EmployeeOperationsController::class, 'undo'])->name('undo');
     });
 });
 

@@ -11,6 +11,9 @@ class CorrectTitleRequest extends EmployeeOperationRequest
      */
     public function rules(): array
     {
-        return ['title' => $this->titleRules()];
+        return [
+            'title' => $this->titleRules(),
+            'reason' => ['required', 'string', 'max:500'],
+        ];
     }
 }

@@ -82,7 +82,7 @@ class TerminateAndRehireTest extends HrOperationsTestCase
         $this->get($this->profile($employee))
             ->assertOk()
             ->assertSee('The last employment ended on 30.06.2000.')
-            ->assertSee('previously held - not possible');
+            ->assertSee('return - worked here before');
 
         $this->from($this->profile($employee))
             ->post(route('employees.rehire', $employee->emp_no), [
@@ -118,7 +118,6 @@ class TerminateAndRehireTest extends HrOperationsTestCase
 
         $this->post($url, [...$valid, 'effective_date' => '2000-06-30'])
             ->assertSessionHasErrorsIn('rehire', ['effective_date' => 'The date must be 01.07.2000 or later (after the end of the last employment).']);
-        $this->post($url, [...$valid, 'dept_no' => $old->dept_no])->assertSessionHasErrorsIn('rehire', ['dept_no']);
         $this->post($url, [...$valid, 'salary' => '-5'])->assertSessionHasErrorsIn('rehire', ['salary']);
         $this->post($url, [...$valid, 'title' => ''])->assertSessionHasErrorsIn('rehire', ['title']);
         $this->post($url, [...$valid, 'effective_date' => CarbonImmutable::tomorrow()->toDateString()])->assertSessionHasErrorsIn('rehire', ['effective_date']);
