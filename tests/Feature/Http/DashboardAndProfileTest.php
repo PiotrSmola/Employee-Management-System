@@ -164,6 +164,20 @@ class DashboardAndProfileTest extends TestCase
         $this->assertStringStartsWith('%PDF', $response->getContent());
     }
 
+    public function test_profile_pdf_filename_survives_characters_not_allowed_in_filenames(): void
+    {
+        $employee = Employee::factory()->current(null, 'Engineer', 55000)
+            ->create(['first_name' => 'Żaneta', 'last_name' => '<b>a/b\\c%</b>']);
+
+        $response = $this->get(route('employees.export-show-pdf', $employee->emp_no));
+
+        $response->assertOk();
+        $this->assertStringContainsString(
+            'employee_details_'.$employee->emp_no.'_Zaneta_b_a_b_c_b.pdf',
+            $response->headers->get('Content-Disposition')
+        );
+    }
+
     public function test_profile_pdf_of_a_former_employee_and_of_an_employee_without_history(): void
     {
         $former = Employee::factory()->former(null, 'Staff', '1999-06-30')->create();

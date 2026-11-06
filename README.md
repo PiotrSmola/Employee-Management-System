@@ -154,7 +154,7 @@ re-creates accounts:
 
 ### Production settings
 
-The Docker stack is a local development setup (`APP_ENV=local`, `APP_DEBUG=true`, demo
+The Docker stack is a local development setup (`APP_ENV=local`, ports bound to `127.0.0.1`, demo
 accounts). For anything reachable by other people set, e.g. in `.env.docker`:
 
 ```env

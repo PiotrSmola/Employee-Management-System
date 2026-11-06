@@ -84,7 +84,7 @@ class LoginRequest extends FormRequest
         RateLimiter::hit($this->ipThrottleKey(), self::DECAY_SECONDS);
 
         AuditLogger::log('auth.login_failed', ActivityLog::SUBJECT_USER, $user?->id, [
-            'email' => Str::limit(Str::lower((string) $this->input('email')), 255, ''),
+            'email' => Str::limit(Str::lower((string) $this->input('email')), 120, ''),
             'reason' => $reason,
         ]);
 

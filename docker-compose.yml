@@ -7,7 +7,7 @@ x-app-environment: &app-environment
   # Must be the same in all three services: set it in .env.docker (docker-up does). Without it the
   # app's entrypoint generates a temporary key that the worker and the scheduler do not know.
   APP_KEY: ${APP_KEY:-}
-  APP_DEBUG: "${APP_DEBUG:-true}"
+  APP_DEBUG: "${APP_DEBUG:-false}"
   APP_URL: http://localhost:${APP_PORT:-8000}
   LOG_CHANNEL: stderr
   LOG_LEVEL: debug
@@ -40,7 +40,7 @@ services:
     image: employee-management-system-app
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-8000}:80"
+      - "127.0.0.1:${APP_PORT:-8000}:80"
     environment: *app-environment
     volumes:
       # Files of queued exports, written by the worker and downloaded through the app.
@@ -107,7 +107,7 @@ services:
     # figures would read most of it from disk on every run.
     command: ["--innodb-buffer-pool-size=${DB_BUFFER_POOL_SIZE:-1G}"]
     ports:
-      - "${FORWARD_DB_PORT:-3306}:3306"
+      - "127.0.0.1:${FORWARD_DB_PORT:-3306}:3306"
     environment:
       MYSQL_DATABASE: ${DB_DATABASE:-employees_management}
       MYSQL_USER: ${DB_USERNAME:-laravel}

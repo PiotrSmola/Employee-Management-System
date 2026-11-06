@@ -19,4 +19,5 @@ Route::get('/employees/{emp_no}', [EmployeeController::class, 'show'])
     ->name('employees.show');
 Route::get('/employees/{emp_no}/export-pdf', [EmployeeController::class, 'exportShowToPdf'])
     ->whereNumber('emp_no')
+    ->middleware('throttle:30,1')
     ->name('employees.export-show-pdf');

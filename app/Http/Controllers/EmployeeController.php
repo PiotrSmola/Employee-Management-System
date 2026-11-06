@@ -7,6 +7,7 @@ use App\Services\EmployeeProfileService;
 use App\Support\EmployeeVisibility;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 
 class EmployeeController extends Controller
 {
@@ -35,7 +36,18 @@ class EmployeeController extends Controller
         $pdf = Pdf::loadView('exports.show-pdf', [...$profile, 'generatedAt' => now()])
             ->setPaper('A4', 'portrait');
 
-        return $pdf->download('employee_details_'.$employee->emp_no.'_'.$employee->first_name.'_'.$employee->last_name.'.pdf');
+        return $pdf->download($this->pdfFilename($employee));
+    }
+
+    /**
+     * Names are free text and may hold characters that are not allowed in a
+     * download filename, such as a slash.
+     */
+    private function pdfFilename(Employee $employee): string
+    {
+        $name = preg_replace('/[^A-Za-z0-9-]+/', '_', Str::ascii($employee->first_name.' '.$employee->last_name));
+
+        return 'employee_details_'.$employee->emp_no.'_'.trim($name, '_').'.pdf';
     }
 
     /**
