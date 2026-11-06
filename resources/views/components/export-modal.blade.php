@@ -1,5 +1,14 @@
+@php
+    // Columns the user may choose (no salary columns without view-salaries - enforced again on the server).
+    $exportColumns = \App\Services\EmployeeExportService::availableColumns(Gate::allows('view-salaries'));
+    $exportFormats = [
+        'csv' => ['label' => 'CSV', 'icon' => 'bi-filetype-csv', 'color' => 'success', 'queueAbove' => (int) config('data_tools.exports.queue_threshold')],
+        'xlsx' => ['label' => 'Excel (XLSX)', 'icon' => 'bi-file-earmark-excel', 'color' => 'success', 'queueAbove' => (int) config('data_tools.exports.queue_threshold')],
+        'pdf' => ['label' => 'PDF', 'icon' => 'bi-file-earmark-pdf', 'color' => 'danger', 'queueAbove' => \App\Services\EmployeeExportService::PDF_LIMIT],
+    ];
+@endphp
 <div class="modal fade" id="exportModal" tabindex="-1" aria-labelledby="exportModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title" id="exportModalLabel">
@@ -15,27 +24,50 @@
                 </div>
 
                 <div class="row g-3">
-                    <div class="col-md-6">
-                        <div class="card h-100 export-option" data-format="csv">
-                            <div class="card-body text-center">
-                                <i class="bi bi-filetype-csv display-4 text-success mb-3"></i>
-                                <h6 class="card-title">CSV Format</h6>
-                                <button type="button" class="btn btn-success mt-2" id="exportCsvBtn">
-                                    <i class="bi bi-download me-1"></i> Export CSV
-                                </button>
+                    @foreach ($exportFormats as $format => $option)
+                        <div class="col-md-4">
+                            <div class="card h-100 export-option" data-format="{{ $format }}">
+                                <div class="card-body text-center">
+                                    <i class="bi {{ $option['icon'] }} display-4 text-{{ $option['color'] }} mb-3"></i>
+                                    <h6 class="card-title">{{ $option['label'] }}</h6>
+                                    <button type="button" class="btn btn-{{ $option['color'] }} mt-2 export-format-btn"
+                                        data-format="{{ $format }}" data-label="{{ __('Export') }} {{ $format === 'xlsx' ? 'Excel' : strtoupper($format) }}"
+                                        data-queue-above="{{ $option['queueAbove'] }}">
+                                        <i class="bi bi-download me-1"></i> {{ __('Export') }} {{ $format === 'xlsx' ? 'Excel' : strtoupper($format) }}
+                                    </button>
+                                    <div class="small text-body-secondary mt-2 export-queue-hint d-none">
+                                        <i class="bi bi-hourglass-split me-1"></i>{{ __('Generated in the background (My exports)') }}
+                                    </div>
+                                </div>
                             </div>
+                        </div>
+                    @endforeach
+                </div>
+
+                <div class="mt-4">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="mb-0 text-body-emphasis"><i class="bi bi-layout-three-columns me-1"></i>{{ __('Columns') }}</h6>
+                        <div class="btn-group btn-group-sm">
+                            <button type="button" class="btn btn-outline-secondary" id="exportColumnsAll">{{ __('All') }}</button>
+                            <button type="button" class="btn btn-outline-secondary" id="exportColumnsNone">{{ __('None') }}</button>
                         </div>
                     </div>
-                    <div class="col-md-6">
-                        <div class="card h-100 export-option" data-format="pdf">
-                            <div class="card-body text-center">
-                                <i class="bi bi-file-earmark-pdf display-4 text-danger mb-3"></i>
-                                <h6 class="card-title">PDF Format</h6>
-                                <button type="button" class="btn btn-danger mt-2" id="exportPdfBtn">
-                                    <i class="bi bi-download me-1"></i> Export PDF
-                                </button>
+                    <div class="row g-2" id="exportColumns">
+                        @foreach ($exportColumns as $key => $label)
+                            <div class="col-6 col-md-4">
+                                <div class="form-check">
+                                    <input class="form-check-input export-column" type="checkbox" value="{{ $key }}"
+                                        id="exportColumn-{{ $key }}" checked>
+                                    <label class="form-check-label" for="exportColumn-{{ $key }}">{{ $label }}</label>
+                                </div>
                             </div>
-                        </div>
+                        @endforeach
+                    </div>
+                    <div class="form-text">
+                        {{ __('The chosen columns apply to every format. PDFs with more than :pdf rows and CSV / Excel files with more than :rows rows are generated in the background and listed under My exports.', [
+                            'pdf' => number_format(\App\Services\EmployeeExportService::PDF_LIMIT),
+                            'rows' => number_format((int) config('data_tools.exports.queue_threshold')),
+                        ]) }}
                     </div>
                 </div>
             </div>
@@ -45,10 +77,51 @@
 
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        const csvBtn = document.getElementById('exportCsvBtn');
-        const pdfBtn = document.getElementById('exportPdfBtn');
+        const formatButtons = Array.from(document.querySelectorAll('.export-format-btn'));
         const exportModal = document.getElementById('exportModal');
         const selectedCountText = document.getElementById('selectedCountText');
+        const columnInputs = Array.from(document.querySelectorAll('.export-column'));
+        const COLUMNS_KEY = 'ems.export.columns';
+        let selectedCount = 0;
+
+        // Remember the column choice in this browser (best effort).
+        try {
+            const saved = JSON.parse(window.localStorage.getItem(COLUMNS_KEY) || 'null');
+            if (Array.isArray(saved) && saved.length > 0) {
+                columnInputs.forEach(input => input.checked = saved.includes(input.value));
+            }
+        } catch (e) {}
+
+        function chosenColumns() {
+            return columnInputs.filter(input => input.checked).map(input => input.value);
+        }
+
+        function refreshButtons() {
+            const hasSelection = selectedCount > 0;
+            const hasColumns = chosenColumns().length > 0;
+
+            formatButtons.forEach(btn => {
+                btn.disabled = !hasSelection || !hasColumns;
+                btn.innerHTML = `<i class="bi bi-download me-1"></i> ${!hasSelection ? 'No Selection' : (!hasColumns ? 'No Columns' : btn.dataset.label)}`;
+                const hint = btn.parentElement.querySelector('.export-queue-hint');
+                hint.classList.toggle('d-none', !(selectedCount > parseInt(btn.dataset.queueAbove, 10)));
+            });
+        }
+
+        columnInputs.forEach(input => input.addEventListener('change', () => {
+            try {
+                window.localStorage.setItem(COLUMNS_KEY, JSON.stringify(chosenColumns()));
+            } catch (e) {}
+            refreshButtons();
+        }));
+        document.getElementById('exportColumnsAll').addEventListener('click', () => {
+            columnInputs.forEach(input => input.checked = true);
+            columnInputs[0]?.dispatchEvent(new Event('change'));
+        });
+        document.getElementById('exportColumnsNone').addEventListener('click', () => {
+            columnInputs.forEach(input => input.checked = false);
+            columnInputs[0]?.dispatchEvent(new Event('change'));
+        });
 
         function waitForLivewire(callback) {
             if (typeof window.Livewire !== 'undefined' && window.Livewire.find && window.Livewire.all) {
@@ -98,63 +171,40 @@
         async function updateSelectedCount() {
             const employeeListComponent = findLivewireComponentByName('employee-list');
 
-            if (!employeeListComponent) {
+            if (!employeeListComponent || typeof employeeListComponent.call !== 'function') {
                 selectedCountText.innerHTML =
                     `<span class="text-danger">Error: EmployeeList component not found.</span>`;
-                csvBtn.disabled = true;
-                pdfBtn.disabled = true;
-                csvBtn.innerHTML = '<i class="bi bi-download me-1"></i> Error';
-                pdfBtn.innerHTML = '<i class="bi bi-download me-1"></i> Error';
-                handleFallbackForCount();
-                return;
-            }
-
-            if (typeof employeeListComponent.call !== 'function') {
-                selectedCountText.innerHTML =
-                    `<span class="text-danger">Error: Component 'employee-list' is not callable.</span>`;
                 handleFallbackForCount();
                 return;
             }
 
             try {
-                const selectedCount = await employeeListComponent.call('getSelectedCount');
+                selectedCount = await employeeListComponent.call('getSelectedCount');
                 selectedCountText.innerHTML =
-                    `<strong>${selectedCount}</strong> employees will be exported.`;
-                const hasSelection = selectedCount > 0;
-
-                csvBtn.disabled = !hasSelection;
-                pdfBtn.disabled = !hasSelection;
-                csvBtn.innerHTML =
-                    `<i class="bi bi-download me-1"></i> ${hasSelection ? 'Export CSV' : 'No Selection'}`;
-                pdfBtn.innerHTML =
-                    `<i class="bi bi-download me-1"></i> ${hasSelection ? 'Export PDF' : 'No Selection'}`;
-
+                    `<strong>${Number(selectedCount).toLocaleString()}</strong> employees will be exported.`;
             } catch (error) {
                 selectedCountText.innerHTML =
                     `<span class="text-danger">Error: Failed to get selection details. ${error.message}</span>`;
                 handleFallbackForCount();
+                return;
             }
+
+            refreshButtons();
         }
 
         function handleFallbackForCount() {
             const exportTriggerButton = document.getElementById('exportTriggerBtn');
-            let count = 0;
+            selectedCount = 0;
             if (exportTriggerButton) {
                 const countSpan = exportTriggerButton.querySelector('#exportCountDisplay');
                 if (countSpan && countSpan.textContent) {
-                    count = parseInt(countSpan.textContent) || 0;
+                    selectedCount = parseInt(countSpan.textContent) || 0;
                 }
             }
 
             selectedCountText.innerHTML =
-                `<strong>${count}</strong> employees will be exported. <small class="text-warning">(display might be approximate)</small>`;
-            const hasSelection = count > 0;
-            csvBtn.disabled = !hasSelection;
-            pdfBtn.disabled = !hasSelection;
-            csvBtn.innerHTML =
-                `<i class="bi bi-download me-1"></i> ${hasSelection ? 'Export CSV' : 'No Selection'}`;
-            pdfBtn.innerHTML =
-                `<i class="bi bi-download me-1"></i> ${hasSelection ? 'Export PDF' : 'No Selection'}`;
+                `<strong>${selectedCount}</strong> employees will be exported. <small class="text-warning">(display might be approximate)</small>`;
+            refreshButtons();
         }
 
         async function getExportPayload() {
@@ -175,7 +225,9 @@
             form.appendChild(input);
         }
 
-        async function handleDownload(format) {
+        async function handleDownload(btn) {
+            const format = btn.dataset.format;
+
             try {
                 const payload = await getExportPayload();
 
@@ -184,8 +236,6 @@
                     return;
                 }
 
-                const btn = format === 'csv' ? csvBtn : pdfBtn;
-                const originalText = btn.innerHTML;
                 btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i> Generating...';
                 btn.disabled = true;
 
@@ -196,6 +246,7 @@
 
                 addHiddenInput(form, '_token', '{{ csrf_token() }}');
                 addHiddenInput(form, 'format', format);
+                addHiddenInput(form, 'columns', chosenColumns().join(','));
                 addHiddenInput(form, 'selectAll', payload.selectAll ? '1' : '0');
 
                 // The selection is sent as "all matching except ..." or "only these",
@@ -224,25 +275,16 @@
                     modalInstance.hide();
                 }
 
-                setTimeout(() => {
-                    btn.innerHTML = originalText;
-                    // Buttons state will be refreshed by updateSelectedCount when modal is shown next time
-                }, 2000);
+                // Buttons are refreshed when the modal is shown the next time.
+                setTimeout(refreshButtons, 2000);
 
             } catch (error) {
                 console.error('Export error:', error.message);
                 alert('An error occurred during export. Please try again. Details: ' + error.message);
-                const btn = format === 'csv' ? csvBtn : pdfBtn;
-                if (format === 'csv') {
-                    btn.innerHTML = '<i class="bi bi-download me-1"></i> Export CSV';
-                } else {
-                    btn.innerHTML = '<i class="bi bi-download me-1"></i> Export PDF';
-                }
                 updateSelectedCount();
             }
         }
 
-        csvBtn.addEventListener('click', () => handleDownload('csv'));
-        pdfBtn.addEventListener('click', () => handleDownload('pdf'));
+        formatButtons.forEach(btn => btn.addEventListener('click', () => handleDownload(btn)));
     });
 </script>

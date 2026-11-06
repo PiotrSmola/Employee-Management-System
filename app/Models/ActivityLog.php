@@ -26,6 +26,12 @@ class ActivityLog extends Model
 
     public const SUBJECT_USER = 'user';
 
+    /** Bulk export (subject id: exports.id of a queued export, null for a direct download). */
+    public const SUBJECT_EXPORT = 'export';
+
+    /** Employee import (subject id: null; the created emp_no range is in `changes`). */
+    public const SUBJECT_IMPORT = 'import';
+
     public const UPDATED_AT = null;
 
     protected $table = 'activity_log';

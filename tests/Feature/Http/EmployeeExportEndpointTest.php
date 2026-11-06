@@ -4,6 +4,7 @@ namespace Tests\Feature\Http;
 
 use App\Models\Department;
 use App\Models\Employee;
+use App\Models\Export;
 use App\Services\EmployeeExportService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -462,15 +463,42 @@ class EmployeeExportEndpointTest extends TestCase
         return [$response, $data];
     }
 
-    public function test_limited_pdf_reports_the_real_selection_total(): void
+    public function test_pdf_above_the_direct_limit_is_queued_instead_of_cut_off(): void
     {
-        [$response, $data] = $this->exportPdfWithLimitOfThree(['excludedEmployees' => [2]]);
+        $this->app->instance(EmployeeExportService::class, new class extends EmployeeExportService
+        {
+            public const PDF_LIMIT = 3;
+        });
+
+        $this->post(route('employees.export'), ['format' => 'pdf', 'selectAll' => '1', 'excludedEmployees' => [2]])
+            ->assertRedirect(route('exports.index'));
+
+        $export = Export::sole();
+        $this->assertSame(Export::STATUS_COMPLETED, $export->status, 'the test queue runs the job right away');
+        $this->assertSame(6, $export->row_count);
+    }
+
+    public function test_queued_pdf_is_cut_off_at_the_queued_limit_and_reports_the_real_total(): void
+    {
+        $this->app->instance(EmployeeExportService::class, new class extends EmployeeExportService
+        {
+            public const PDF_LIMIT = 2;
+        });
+        config(['data_tools.exports.queued_pdf_limit' => 3]);
+
+        $data = [];
+        View::composer('exports.employees-pdf', function ($view) use (&$data) {
+            $data = $view->getData();
+        });
+
+        $this->post(route('employees.export'), ['format' => 'pdf', 'selectAll' => '1', 'excludedEmployees' => [2]])
+            ->assertRedirect(route('exports.index'));
 
         $this->assertSame([1, 3, 4], $data['employees']->pluck('emp_no')->map(fn ($n) => (int) $n)->all());
         $this->assertSame(3, $data['totalCount']);
         $this->assertSame(6, $data['selectedCount'], 'all 7 employees except one, not the capped row count');
         $this->assertTrue($data['isLimited']);
-        $this->assertStringContainsString('employees_selected_6_', $response->headers->get('Content-Disposition'));
+        $this->assertSame(3, Export::sole()->row_count);
     }
 
     public function test_pdf_with_exactly_the_limit_is_not_marked_as_limited(): void
