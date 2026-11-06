@@ -211,6 +211,39 @@ class WorkforceReportsTest extends TestCase
         ], $rows);
     }
 
+    public function test_overall_figures_count_a_person_with_two_open_departments_once(): void
+    {
+        // E1 (Sales) also gets an open row in Development.
+        DeptEmp::create(['emp_no' => $this->people['E1']->emp_no, 'dept_no' => 'd002', 'from_date' => '1999-01-01', 'to_date' => '9999-01-01']);
+        $context = $this->context(asOf: '2000-01-01');
+
+        $summary = $this->reports->summary($context);
+        $this->assertSame(4, $summary['headcount']);
+        $this->assertEqualsWithDelta(50.0, $summary['femaleShare'], 1e-9);
+        $this->assertEqualsWithDelta(11900 / 4 / 365.25, $summary['tenure'], 1e-9);
+
+        $tenure = $this->reports->tenure($context);
+        $this->assertSame(4, $tenure->totals[0]['employees']);
+        $this->assertEqualsWithDelta(11900 / 4 / 365.25, $tenure->totals[0]['tenure'], 1e-9);
+        // In the rows of both departments.
+        $this->assertSame([1, 4], array_column($tenure->rows, 'employees'));
+
+        $gender = collect($this->reports->gender($context)->rows)->keyBy('group');
+        $this->assertSame([2, 2], [$gender['All employees']['female'], $gender['All employees']['male']]);
+        $this->assertSame([2, 2], [$gender['Development']['female'], $gender['Development']['male']]);
+
+        $this->assertSame(4, array_sum(array_column($this->reports->age($context)->rows, 'total')));
+    }
+
+    public function test_a_department_filter_counts_a_person_with_two_open_departments(): void
+    {
+        DeptEmp::create(['emp_no' => $this->people['E1']->emp_no, 'dept_no' => 'd002', 'from_date' => '1999-01-01', 'to_date' => '9999-01-01']);
+
+        // Lowest dept_no is Sales, but in the Development filter E1 still counts.
+        $this->assertSame(4, $this->reports->summary($this->context('d002', '2000-01-01'))['headcount']);
+        $this->assertSame(1, $this->reports->summary($this->context('d001', '2000-01-01'))['headcount']);
+    }
+
     public function test_charts_describe_the_rows(): void
     {
         $table = $this->reports->headcount($this->context());

@@ -80,6 +80,12 @@ final class ReportContext
         return $this->visibility->isDepartmentScoped() && $this->visibility->department() === null;
     }
 
+    /** Nothing to compute: every report of this context is empty, no query runs. */
+    public function isEmpty(): bool
+    {
+        return $this->seesNobody();
+    }
+
     public function isDepartmentScoped(): bool
     {
         return $this->visibility->isDepartmentScoped();

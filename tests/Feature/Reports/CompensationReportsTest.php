@@ -2,6 +2,9 @@
 
 namespace Tests\Feature\Reports;
 
+use App\Models\DeptEmp;
+use App\Models\Salary;
+use App\Models\Title;
 use App\Models\User;
 use App\Reports\CompensationReports;
 use App\Reports\ReportContext;
@@ -136,6 +139,32 @@ class CompensationReportsTest extends TestCase
 
         $growth = $this->reports->growth($context)->rows;
         $this->assertSame('1992', end($growth)['year']);
+    }
+
+    public function test_overall_figures_count_a_person_with_several_open_rows_once(): void
+    {
+        $e1 = $this->people['E1']->emp_no;
+        DeptEmp::create(['emp_no' => $e1, 'dept_no' => 'd002', 'from_date' => '1999-01-01', 'to_date' => '9999-01-01']);
+        Title::create(['emp_no' => $e1, 'title' => 'Manager', 'from_date' => '1999-01-01', 'to_date' => '9999-01-01']);
+        // A second open salary: the one that started last counts.
+        Salary::create(['emp_no' => $e1, 'salary' => 52000, 'from_date' => '1999-01-01', 'to_date' => '9999-01-01']);
+
+        $context = $this->context();
+        $summary = $this->reports->summary($context);
+        // 52000, 65000, 70000, 80000
+        $this->assertSame(4, $summary['employees']);
+        $this->assertEquals(66750, $summary['average']);
+        $this->assertEquals(67500, $summary['median']);
+        // Women (52000 + 80000) / 2 = 66000, men 67500
+        $this->assertEqualsWithDelta(1500 / 67500 * 100, $summary['payGap'], 1e-9);
+        $this->assertSame(4, array_sum(array_column($this->reports->distribution($context)->rows, 'total')));
+
+        // One row per person in each of their groups.
+        $departments = collect($this->reports->byDepartment($context)->rows)->keyBy('group');
+        $this->assertSame([1, 4], [$departments['Sales']['employees'], $departments['Development']['employees']]);
+        $this->assertEquals(52000, $departments['Sales']['median']);
+        $titles = collect($this->reports->byTitle($context)->rows)->keyBy('group');
+        $this->assertSame([1, 1], [$titles['Staff']['employees'], $titles['Manager']['employees']]);
     }
 
     public function test_department_filter_and_manager_scope(): void

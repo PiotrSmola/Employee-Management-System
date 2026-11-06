@@ -55,9 +55,9 @@ class WorkforceReports
      */
     public function summary(ReportContext $context): array
     {
-        $snapshot = $this->snapshot($context);
-        $headcount = array_sum(array_column($snapshot, 'n'));
-        $female = array_sum(array_column(array_filter($snapshot, fn ($r) => $r['gender'] === 'F'), 'n'));
+        $people = $this->people($context);
+        $headcount = array_sum(array_column($people, 'n'));
+        $female = array_sum(array_column(array_filter($people, fn ($r) => $r['gender'] === 'F'), 'n'));
 
         $turnover = null;
         $turnoverYear = null;
@@ -72,7 +72,7 @@ class WorkforceReports
 
         return [
             'headcount' => $headcount,
-            'tenure' => $headcount > 0 ? array_sum(array_column($snapshot, 'tenure_days')) / $headcount / 365.25 : null,
+            'tenure' => $headcount > 0 ? array_sum(array_column($people, 'tenure_days')) / $headcount / 365.25 : null,
             'femaleShare' => $headcount > 0 ? $female / $headcount * 100 : null,
             'turnover' => $turnover,
             'turnoverYear' => $turnoverYear,
@@ -218,11 +218,12 @@ class WorkforceReports
             ];
         }
 
-        $n = array_sum(array_column($byDepartment, 'n'));
+        $people = $this->people($context);
+        $n = array_sum(array_column($people, 'n'));
         $totals = count($rows) > 1 ? [[
             'department' => __('All departments'),
             'employees' => $n,
-            'tenure' => array_sum(array_column($byDepartment, 'days')) / $n / 365.25,
+            'tenure' => array_sum(array_column($people, 'tenure_days')) / $n / 365.25,
         ]] : [];
 
         return new ReportTable(
@@ -271,9 +272,8 @@ class WorkforceReports
         ];
 
         $overall = ['F' => 0, 'M' => 0];
-        foreach ($byDepartment as $counts) {
-            $overall['F'] += $counts['F'] ?? 0;
-            $overall['M'] += $counts['M'] ?? 0;
+        foreach ($this->people($context) as $r) {
+            $overall[$r['gender']] += $r['n'];
         }
 
         $deptRows = [];
@@ -331,7 +331,7 @@ class WorkforceReports
     public function age(ReportContext $context): ReportTable
     {
         $bands = [];
-        foreach ($this->snapshot($context) as $r) {
+        foreach ($this->people($context) as $r) {
             $bands[$r['age_band']][$r['gender']] = ($bands[$r['age_band']][$r['gender']] ?? 0) + $r['n'];
         }
 
@@ -423,7 +423,7 @@ class WorkforceReports
      */
     private function movements(ReportContext $context): array
     {
-        if ($context->seesNobody()) {
+        if ($context->isEmpty()) {
             return ['events' => [], 'hires' => [], 'last_year' => null];
         }
 
@@ -535,13 +535,27 @@ class WorkforceReports
     }
 
     /**
-     * Employed on the as-of date by department, gender and age band.
+     * The snapshot with every employee counted once, for figures over the whole scope.
      *
-     * @return list<array{dept_no: string, gender: string, age_band: int, n: int, tenure_days: int}>
+     * @return list<array{dept_no: string, gender: string, age_band: int, n: int, tenure_days: int, primary: bool}>
+     */
+    private function people(ReportContext $context): array
+    {
+        return array_values(array_filter($this->snapshot($context), fn (array $r) => $r['primary']));
+    }
+
+    /**
+     * Employed on the as-of date by department, gender and age band. Someone with
+     * several open department rows is in the groups of each department; `primary`
+     * marks the rows that count each person once (lowest dept_no of the open rows,
+     * as in EmployeeVisibility). A department filter sees a person only once anyway:
+     * (emp_no, dept_no) is the primary key.
+     *
+     * @return list<array{dept_no: string, gender: string, age_band: int, n: int, tenure_days: int, primary: bool}>
      */
     private function snapshot(ReportContext $context): array
     {
-        if ($context->seesNobody()) {
+        if ($context->isEmpty()) {
             return [];
         }
 
@@ -553,8 +567,21 @@ class WorkforceReports
                 ->selectRaw('de.dept_no, e.gender, FLOOR(TIMESTAMPDIFF(YEAR, e.birth_date, ?) / 5) * 5 AS age_band', [$date])
                 ->selectRaw('COUNT(*) AS n, SUM(DATEDIFF(?, e.hire_date)) AS tenure_days', [$date])
                 ->when($context->department !== null, fn ($q) => $q->where('de.dept_no', $context->department))
-                ->groupBy('de.dept_no', 'e.gender', 'age_band');
+                ->groupBy('de.dept_no', 'e.gender', 'age_band', 'is_primary');
             $context->constrain($query, 'de.emp_no');
+
+            if ($context->department === null) {
+                $query->leftJoinSub(
+                    ReportSources::open(ReportSources::deptEmp('o'), 'o', $date)
+                        ->select('o.emp_no')
+                        ->selectRaw('MIN(o.dept_no) AS first_dept')
+                        ->groupBy('o.emp_no')
+                        ->havingRaw('COUNT(*) > 1'),
+                    'dup', 'dup.emp_no', '=', 'de.emp_no'
+                )->selectRaw('(dup.emp_no IS NULL OR de.dept_no = dup.first_dept) AS is_primary');
+            } else {
+                $query->selectRaw('1 AS is_primary');
+            }
 
             return $query->get()->map(fn ($r) => [
                 'dept_no' => $r->dept_no,
@@ -562,6 +589,7 @@ class WorkforceReports
                 'age_band' => (int) $r->age_band,
                 'n' => (int) $r->n,
                 'tenure_days' => (int) $r->tenure_days,
+                'primary' => (bool) $r->is_primary,
             ])->all();
         });
     }
@@ -573,7 +601,7 @@ class WorkforceReports
      */
     private function titleGender(ReportContext $context): array
     {
-        if ($context->seesNobody()) {
+        if ($context->isEmpty()) {
             return [];
         }
 

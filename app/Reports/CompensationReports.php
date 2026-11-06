@@ -12,10 +12,8 @@ use Illuminate\Database\Query\Builder;
  * Salaries on the as-of date D are the salaries rows open on D (from_date <= D <
  * to_date), with the department and title open on D. Cached aggregates:
  *
- *  - salary_snapshot: groups of (department, title, gender, 10k salary band) with
- *    count, sum, min and max - every average, minimum, maximum, histogram and pay
- *    gap is summed up from them - and exact medians per department, per title and
- *    overall;
+ *  - salary_snapshot: count, average, exact median, minimum, maximum, gender split,
+ *    pay gap and 10k salary bands of the whole scope, per department and per title;
  *  - salary_growth: salaries rows grouped by start and end year (intersected
  *    with the department rows for a department scope); the average on 31 Dec
  *    of each year is (sum of started - sum of ended) / (count started - count ended).
@@ -26,6 +24,9 @@ class CompensationReports
 
     /** Width of a salary band of the distribution. */
     public const BAND = 10000;
+
+    /** Packs a start date (YYYYMMDD) and a salary into one integer: date * RANK + salary. */
+    private const RANK = 10_000_000_000;
 
     public function __construct(
         private readonly ReportCache $cache,
@@ -48,12 +49,12 @@ class CompensationReports
      */
     public function summary(ReportContext $context): array
     {
-        $overall = $this->totals($this->summaryRows($context));
+        $overall = $this->snapshot($context)['overall'];
 
         return [
             'employees' => $overall['n'],
             'average' => $overall['average'],
-            'median' => $this->medians($context)['overall'],
+            'median' => $overall['median'],
             'payGap' => $overall['gap'],
         ];
     }
@@ -67,10 +68,9 @@ class CompensationReports
     public function byDepartment(ReportContext $context): ReportTable
     {
         $departments = $this->labels->departments();
-        $medians = $this->medians($context);
         $rows = [];
-        foreach ($this->grouped($context, 'dept_no') as $deptNo => $group) {
-            $rows[] = $this->statsRow($departments[$deptNo] ?? $deptNo, $group, $medians['departments'][$deptNo] ?? null);
+        foreach ($this->snapshot($context)['departments'] as $deptNo => $group) {
+            $rows[] = $this->statsRow($departments[$deptNo] ?? $deptNo, $group);
         }
 
         return $this->statsTable('salary-departments', __('Salaries by department'), __('Department'), $rows, $context,
@@ -79,10 +79,9 @@ class CompensationReports
 
     public function byTitle(ReportContext $context): ReportTable
     {
-        $medians = $this->medians($context);
         $rows = [];
-        foreach ($this->grouped($context, 'title') as $title => $group) {
-            $rows[] = $this->statsRow($title === '' ? __('(no title)') : $title, $group, $medians['titles'][$title] ?? null);
+        foreach ($this->snapshot($context)['titles'] as $title => $group) {
+            $rows[] = $this->statsRow($title === '' ? __('(no title)') : $title, $group);
         }
 
         return $this->statsTable('salary-titles', __('Salaries by title'), __('Title'), $rows, $context,
@@ -91,10 +90,7 @@ class CompensationReports
 
     public function distribution(ReportContext $context): ReportTable
     {
-        $bands = [];
-        foreach ($this->summaryRows($context) as $r) {
-            $bands[$r['band']][$r['gender']] = ($bands[$r['band']][$r['gender']] ?? 0) + $r['n'];
-        }
+        $bands = $this->snapshot($context)['overall']['bands'];
 
         $rows = [];
         if ($bands !== []) {
@@ -148,17 +144,17 @@ class CompensationReports
             'gap' => $g['gap'],
         ];
 
+        $snapshot = $this->snapshot($context);
         $deptRows = [];
-        foreach ($this->grouped($context, 'dept_no') as $deptNo => $group) {
+        foreach ($snapshot['departments'] as $deptNo => $group) {
             $deptRows[] = $row(__('Department'), $departments[$deptNo] ?? $deptNo, $group);
         }
         $titleRows = [];
-        foreach ($this->grouped($context, 'title') as $title => $group) {
+        foreach ($snapshot['titles'] as $title => $group) {
             $titleRows[] = $row(__('Title'), $title === '' ? __('(no title)') : $title, $group);
         }
 
-        $all = $this->summaryRows($context);
-        $rows = $all === [] ? [] : [$row(__('Overall'), __('All employees'), $this->totals($all)), ...$deptRows, ...$titleRows];
+        $rows = $snapshot['overall']['n'] === 0 ? [] : [$row(__('Overall'), __('All employees'), $snapshot['overall']), ...$deptRows, ...$titleRows];
 
         $bars = fn (string $id, string $title, array $groupRows) => [
             'id' => $id, 'type' => 'bar', 'horizontal' => true, 'format' => 'percent', 'title' => $title,
@@ -243,10 +239,7 @@ class CompensationReports
      */
     private function statsTable(string $key, string $title, string $groupLabel, array $rows, ReportContext $context, string $description): ReportTable
     {
-        $all = $this->summaryRows($context);
-        $totals = count($rows) > 1
-            ? [$this->statsRow(__('All employees'), $this->totals($all), $this->medians($context)['overall'])]
-            : [];
+        $totals = count($rows) > 1 ? [$this->statsRow(__('All employees'), $this->snapshot($context)['overall'])] : [];
 
         $charts = $rows === [] ? [] : [[
             'id' => $key.'-chart', 'type' => 'bar', 'horizontal' => true, 'format' => 'money',
@@ -276,63 +269,19 @@ class CompensationReports
     }
 
     /**
-     * @param  array{n: int, average: ?float, min: ?int, max: ?int}  $group
+     * @param  array<string, mixed>  $group  see {@see stats()}
      * @return array<string, mixed>
      */
-    private function statsRow(string $label, array $group, ?float $median): array
+    private function statsRow(string $label, array $group): array
     {
         return [
             'group' => $label,
             'employees' => $group['n'],
             'average' => $group['average'],
-            'median' => $median,
+            'median' => $group['median'],
             'min' => $group['min'],
             'max' => $group['max'],
         ];
-    }
-
-    /**
-     * Summary rows totalled per department or per title.
-     *
-     * @return array<string, array<string, mixed>>
-     */
-    private function grouped(ReportContext $context, string $by): array
-    {
-        $groups = [];
-        foreach ($this->summaryRows($context) as $r) {
-            $groups[(string) $r[$by]][] = $r;
-        }
-        ksort($groups);
-
-        return array_map(fn (array $rows) => $this->totals($rows), $groups);
-    }
-
-    /**
-     * Count, average, min, max - overall and per gender - and the pay gap of summary rows.
-     *
-     * @param  list<array<string, mixed>>  $rows
-     * @return array<string, mixed>
-     */
-    private function totals(array $rows): array
-    {
-        $t = ['n' => 0, 'sum' => 0, 'min' => null, 'max' => null, 'F' => ['n' => 0, 'sum' => 0], 'M' => ['n' => 0, 'sum' => 0]];
-        foreach ($rows as $r) {
-            $t['n'] += $r['n'];
-            $t['sum'] += $r['sum'];
-            $t['min'] = $t['min'] === null ? $r['min'] : min($t['min'], $r['min']);
-            $t['max'] = $t['max'] === null ? $r['max'] : max($t['max'], $r['max']);
-            $t[$r['gender']]['n'] += $r['n'];
-            $t[$r['gender']]['sum'] += $r['sum'];
-        }
-
-        $t['average'] = $t['n'] > 0 ? $t['sum'] / $t['n'] : null;
-        $t['female'] = $t['F']['n'] > 0 ? $t['F']['sum'] / $t['F']['n'] : null;
-        $t['male'] = $t['M']['n'] > 0 ? $t['M']['sum'] / $t['M']['n'] : null;
-        $t['gap'] = $t['female'] !== null && $t['male'] !== null && $t['male'] > 0
-            ? ($t['male'] - $t['female']) / $t['male'] * 100
-            : null;
-
-        return $t;
     }
 
     /**
@@ -352,86 +301,104 @@ class CompensationReports
     }
 
     /**
-     * @return list<array{dept_no: string, title: string, gender: string, band: int, n: int, sum: int, min: int, max: int}>
-     */
-    private function summaryRows(ReportContext $context): array
-    {
-        return $this->snapshot($context)['summary'];
-    }
-
-    /**
-     * Exact medians per department, per title and overall.
+     * Statistics of the salaries on the as-of date, over the whole scope and per
+     * department and title. Each employee counts once per group, also with several
+     * open rows; rows of a person in two departments or with two titles appear in
+     * both groups. A person's salary is the open row that started last (the highest
+     * one when two started on the same day), so the result does not depend on the
+     * order of the rows.
      *
-     * @return array{departments: array<string, float>, titles: array<string, float>, overall: ?float}
-     */
-    private function medians(ReportContext $context): array
-    {
-        return $this->snapshot($context)['medians'];
-    }
-
-    /**
-     * Summary groups and medians of the salaries on the as-of date.
+     * One pass in PHP over the open salaries (about 240k rows in the full dataset)
+     * instead of SQL aggregation: medians in MySQL need a sort per partition, and
+     * with the default sort buffer and temporary table sizes those sorts go to disk
+     * and take far longer than the join itself. The rows are held by the database
+     * client while they are read, and the page keeps one number per employee and
+     * group: about 100 MB on the full dataset, see {@see README.md}.
      *
-     * One pass over the open salaries (about 240k rows in the full dataset, read
-     * with a cursor) instead of SQL aggregation: medians in MySQL need a sort per
-     * partition, and with the default sort buffer and temporary table sizes those
-     * sorts go to disk and take far longer than the join itself.
-     *
-     * @return array{summary: list<array<string, mixed>>, medians: array{departments: array<string, float>, titles: array<string, float>, overall: ?float}}
+     * @return array{overall: array<string, mixed>, departments: array<string, array<string, mixed>>, titles: array<string, array<string, mixed>>}
      */
     private function snapshot(ReportContext $context): array
     {
-        if ($context->seesNobody()) {
-            return ['summary' => [], 'medians' => ['departments' => [], 'titles' => [], 'overall' => null]];
+        if ($context->isEmpty()) {
+            return ['overall' => self::stats([], []), 'departments' => [], 'titles' => []];
         }
 
         return $this->cache->remember('salary_snapshot', $context, function () use ($context) {
             $rows = $this->base($context)
-                ->selectRaw("de.dept_no, COALESCE(t.title, '') AS title, e.gender, s.salary")
+                ->selectRaw("s.emp_no, s.from_date, s.salary, de.dept_no, COALESCE(t.title, '') AS title, e.gender")
                 ->cursor();
 
-            $groups = [];
+            // emp_no => start date and salary packed into one integer: the largest wins.
+            $overall = [];
             $departments = [];
             $titles = [];
-            $all = [];
+            $women = [];
 
             foreach ($rows as $r) {
-                $salary = (int) $r->salary;
-                $band = (int) floor($salary / self::BAND);
-                $key = "{$r->dept_no}|{$r->title}|{$r->gender}|{$band}";
+                $emp = (int) $r->emp_no;
+                $rank = (int) str_replace('-', '', (string) $r->from_date) * self::RANK + (int) $r->salary;
 
-                $group = $groups[$key] ?? [
-                    'dept_no' => $r->dept_no, 'title' => $r->title, 'gender' => $r->gender, 'band' => $band,
-                    'n' => 0, 'sum' => 0, 'min' => $salary, 'max' => $salary,
-                ];
-                $group['n']++;
-                $group['sum'] += $salary;
-                $group['min'] = min($group['min'], $salary);
-                $group['max'] = max($group['max'], $salary);
-                $groups[$key] = $group;
+                $overall[$emp] = max($overall[$emp] ?? 0, $rank);
+                $departments[$r->dept_no][$emp] = max($departments[$r->dept_no][$emp] ?? 0, $rank);
+                $titles[$r->title][$emp] = max($titles[$r->title][$emp] ?? 0, $rank);
 
-                $departments[$r->dept_no][] = $salary;
-                $titles[$r->title][] = $salary;
-                $all[] = $salary;
+                if ($r->gender === 'F') {
+                    $women[$emp] = true;
+                }
             }
 
-            return ['summary' => array_values($groups), 'medians' => [
-                'departments' => array_map(self::median(...), $departments),
-                'titles' => array_map(self::median(...), $titles),
-                'overall' => $all === [] ? null : self::median($all),
-            ]];
+            ksort($departments);
+            ksort($titles);
+
+            return [
+                'overall' => self::stats($overall, $women),
+                'departments' => array_map(fn (array $ranks) => self::stats($ranks, $women), $departments),
+                'titles' => array_map(fn (array $ranks) => self::stats($ranks, $women), $titles),
+            ];
         });
     }
 
     /**
-     * @param  non-empty-list<int>  $values
+     * Count, average, median, min, max, gender split and pay gap of one group.
+     *
+     * @param  array<int, int>  $ranks  emp_no => packed start date and salary
+     * @param  array<int, true>  $women
+     * @return array<string, mixed>
      */
-    private static function median(array $values): float
+    private static function stats(array $ranks, array $women): array
     {
-        sort($values);
-        $n = count($values);
+        $gender = ['F' => ['n' => 0, 'sum' => 0], 'M' => ['n' => 0, 'sum' => 0]];
+        $bands = [];
+        $salaries = [];
 
-        return ($values[intdiv($n - 1, 2)] + $values[intdiv($n, 2)]) / 2;
+        foreach ($ranks as $emp => $rank) {
+            $salary = $rank % self::RANK;
+            $g = isset($women[$emp]) ? 'F' : 'M';
+            $salaries[] = $salary;
+            $gender[$g]['n']++;
+            $gender[$g]['sum'] += $salary;
+            $band = (int) floor($salary / self::BAND);
+            $bands[$band][$g] = ($bands[$band][$g] ?? 0) + 1;
+        }
+
+        sort($salaries);
+        $n = count($salaries);
+        $female = $gender['F']['n'] > 0 ? $gender['F']['sum'] / $gender['F']['n'] : null;
+        $male = $gender['M']['n'] > 0 ? $gender['M']['sum'] / $gender['M']['n'] : null;
+
+        return [
+            'n' => $n,
+            'average' => $n > 0 ? array_sum($salaries) / $n : null,
+            'median' => $n > 0 ? ($salaries[intdiv($n - 1, 2)] + $salaries[intdiv($n, 2)]) / 2 : null,
+            'min' => $salaries[0] ?? null,
+            'max' => $salaries[$n - 1] ?? null,
+            'F' => $gender['F'],
+            'M' => $gender['M'],
+            'female' => $female,
+            'male' => $male,
+            'gap' => $female !== null && $male !== null && $male > 0 ? ($male - $female) / $male * 100 : null,
+            'bands' => $bands,
+        ];
     }
 
     /**
@@ -441,7 +408,7 @@ class CompensationReports
      */
     private function growthEvents(ReportContext $context): array
     {
-        if ($context->seesNobody()) {
+        if ($context->isEmpty()) {
             return ['events' => [], 'last_year' => null];
         }
 
