@@ -22,7 +22,9 @@ Route::prefix('departments')->name('departments.')->where(['department' => 'd[0-
         Route::put('/{department}', [DepartmentController::class, 'update'])->name('update');
         Route::delete('/{department}', [DepartmentController::class, 'destroy'])->name('destroy');
 
-        Route::get('/{department}/manager-candidates', [DepartmentManagerController::class, 'candidates'])->name('managers.candidates');
+        Route::get('/{department}/manager-candidates', [DepartmentManagerController::class, 'candidates'])
+            ->middleware('throttle:60,1')
+            ->name('managers.candidates');
         Route::post('/{department}/managers', [DepartmentManagerController::class, 'store'])->name('managers.store');
         Route::post('/{department}/managers/end', [DepartmentManagerController::class, 'end'])->name('managers.end');
     });

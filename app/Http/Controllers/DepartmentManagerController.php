@@ -34,6 +34,7 @@ class DepartmentManagerController extends Controller
                 'name' => $row->first_name.' '.$row->last_name,
                 'title' => $row->title,
                 'since' => $row->since,
+                'manager' => $row->manager,
             ])->values(),
         ]);
     }

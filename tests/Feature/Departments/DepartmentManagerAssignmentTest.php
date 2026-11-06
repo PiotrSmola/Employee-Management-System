@@ -14,6 +14,7 @@ use App\Support\FigureCache;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Route;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\ActsAsAdmin;
 use Tests\TestCase;
@@ -198,7 +199,61 @@ class DepartmentManagerAssignmentTest extends TestCase
         $this->assertSame([], $names('%'));
 
         $first = $this->getJson(route('departments.managers.candidates', ['department' => 'd005', 'q' => 'Engineer']))->json('data.0');
-        $this->assertSame(['emp_no' => $this->engineer->emp_no, 'name' => 'Ed Engineer', 'title' => 'Engineer', 'since' => '1994-01-01'], $first);
+        $this->assertSame(['emp_no' => $this->engineer->emp_no, 'name' => 'Ed Engineer', 'title' => 'Engineer', 'since' => '1994-01-01', 'manager' => null], $first);
+    }
+
+    public function test_candidate_search_by_number_and_by_several_words(): void
+    {
+        Employee::factory()->current($this->dev)->create(['emp_no' => 777123, 'first_name' => 'Anna', 'last_name' => 'Smith']);
+        Employee::factory()->current($this->dev)->create(['emp_no' => 777456, 'first_name' => 'Anna', 'last_name' => 'Jones']);
+        Employee::factory()->current($this->dev)->create(['emp_no' => 888123, 'first_name' => 'Smith', 'last_name' => 'Anders']);
+
+        $numbers = fn (string $q) => collect($this->candidates($q))->pluck('emp_no')->all();
+
+        $this->assertEqualsCanonicalizing([777123, 777456], $numbers('777'));
+        $this->assertSame([777123], $numbers('7771'));
+        $this->assertSame([], $numbers('123'));              // a prefix, not any part of the number
+        $this->assertSame([777123], $numbers('anna smith'));
+        $this->assertSame([777123], $numbers('smith anna'));
+        $this->assertSame([888123], $numbers('smith anders'));
+    }
+
+    public function test_candidate_search_treats_like_wildcards_as_text(): void
+    {
+        Employee::factory()->current($this->dev)->create(['first_name' => 'Jo_Ann', 'last_name' => 'Under']);
+        Employee::factory()->current($this->dev)->create(['first_name' => 'JoxAnn', 'last_name' => 'Plain']);
+        Employee::factory()->current($this->dev)->create(['first_name' => '50%Off', 'last_name' => 'Percent']);
+
+        $names = fn (string $q) => collect($this->candidates($q))->pluck('name')->all();
+
+        $this->assertSame(['Jo_Ann Under'], $names('Jo_'));
+        $this->assertSame(['50%Off Percent'], $names('50%'));
+        $this->assertSame([], $names('%%'));
+        $this->assertSame([], $names('__'));
+    }
+
+    public function test_a_name_search_needs_two_characters(): void
+    {
+        $this->assertSame([], $this->candidates('e'));
+        $this->assertCount(1, $this->candidates('ed'));
+        $this->assertCount(2, $this->candidates(''));       // the first ones, as a start
+    }
+
+    public function test_candidates_mark_current_and_former_managers(): void
+    {
+        $former = Employee::factory()->current($this->dev)->create(['first_name' => 'Fay', 'last_name' => 'Former']);
+        DeptManager::create(['emp_no' => $former->emp_no, 'dept_no' => 'd005', 'from_date' => '1990-01-01', 'to_date' => '1995-01-01']);
+
+        $roles = collect($this->candidates(''))->pluck('manager', 'name')->all();
+
+        $this->assertSame(['Bella Boss' => 'current', 'Ed Engineer' => null, 'Fay Former' => 'former'], $roles);
+    }
+
+    public function test_the_candidate_search_is_rate_limited(): void
+    {
+        $route = Route::getRoutes()->getByName('departments.managers.candidates');
+
+        $this->assertContains('throttle:60,1', $route->gatherMiddleware());
     }
 
     /**
@@ -219,6 +274,16 @@ class DepartmentManagerAssignmentTest extends TestCase
         $this->getJson(route('departments.managers.candidates', $this->dev))->assertForbidden();
 
         $this->assertSame([[$this->boss->emp_no, '1995-01-01', '9999-01-01']], $this->periods('d005'));
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function candidates(string $q): array
+    {
+        return $this->getJson(route('departments.managers.candidates', ['department' => 'd005', 'q' => $q]))
+            ->assertOk()
+            ->json('data');
     }
 
     private function warmFigures(): void

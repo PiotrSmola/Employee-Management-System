@@ -31,7 +31,7 @@
                 </div>
                 <div id="managerResults" class="list-group position-absolute w-100 shadow d-none"
                     style="z-index: 1050; max-height: 280px; overflow-y: auto;"></div>
-                <div id="managerSearchHelp" class="form-text">{{ __('Type to search; pick an employee from the list.') }}</div>
+                <div id="managerSearchHelp" class="form-text">{{ __('Type a number or at least two letters of a name; pick an employee from the list.') }}</div>
             </div>
             <div class="mb-3">
                 <label for="from_date" class="form-label fw-semibold">{{ __('Effective date') }}</label>
@@ -88,8 +88,9 @@
         const noResults = @json(__('No current employee found'));
         const chooseFirst = @json(__('Choose an employee from the list.'));
         const sinceLabel = @json(__('in the department since'));
+        const roleLabels = @json(['current' => __('Current manager'), 'former' => __('Former manager of this department')]);
         let timer = null;
-        let request = 0;
+        let pending = null;
 
         const hide = () => results.classList.add('d-none');
 
@@ -110,7 +111,7 @@
                 name.textContent = row.name + ' (#' + row.emp_no + ')';
                 const meta = document.createElement('small');
                 meta.className = 'text-muted';
-                meta.textContent = [row.title, row.since ? sinceLabel + ' ' + row.since : null].filter(Boolean).join(' · ');
+                meta.textContent = [row.title, row.since ? sinceLabel + ' ' + row.since : null, roleLabels[row.manager]].filter(Boolean).join(' · ');
                 item.append(name, meta);
                 item.addEventListener('click', () => {
                     empNo.value = row.emp_no;
@@ -125,14 +126,20 @@
         };
 
         const load = () => {
-            const current = ++request;
+            // Only the latest search matters; typing cancels the one still running.
+            if (pending) {
+                pending.abort();
+            }
+            pending = new AbortController();
+
             fetch(search.dataset.url + '?q=' + encodeURIComponent(search.value.trim()), {
                 headers: { 'Accept': 'application/json' },
-                credentials: 'same-origin'
+                credentials: 'same-origin',
+                signal: pending.signal
             })
                 .then(response => response.ok ? response.json() : { data: [] })
-                .then(json => { if (current === request) render(json.data || []); })
-                .catch(hide);
+                .then(json => render(json.data || []))
+                .catch(error => { if (error.name !== 'AbortError') hide(); });
         };
 
         search.addEventListener('input', () => {

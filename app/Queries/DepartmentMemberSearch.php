@@ -9,7 +9,9 @@ use Illuminate\Support\Facades\DB;
 /**
  * Current employees of a department matching a search term - the choices of
  * the "assign manager" select. A numeric term matches the employee number
- * (prefix), otherwise every word has to be the start of the first or last name.
+ * (prefix), otherwise every word has to be the start of the first or last name
+ * and the term needs at least MIN_NAME_LENGTH characters. Earlier and current
+ * managers of the department are marked (`manager`: current, former or null).
  *
  * Without a term only the (dept_no, to_date) index is read. There is no index on
  * names, so a name search looks at each employee once; only the matches are sorted.
@@ -20,14 +22,20 @@ class DepartmentMemberSearch
 
     public const LIMIT = 20;
 
+    public const MIN_NAME_LENGTH = 2;
+
     private const COLUMNS = ['e.emp_no', 'e.first_name', 'e.last_name', 'de.from_date as since'];
 
     /**
-     * @return Collection<int, object{emp_no: int, first_name: string, last_name: string, since: string, title: ?string}>
+     * @return Collection<int, object{emp_no: int, first_name: string, last_name: string, since: string, title: ?string, manager: ?string}>
      */
     public function search(string $deptNo, string $term, int $limit = self::LIMIT): Collection
     {
         $term = trim($term);
+
+        if ($term !== '' && ! ctype_digit($term) && mb_strlen($term) < self::MIN_NAME_LENGTH) {
+            return collect();
+        }
 
         $rows = $term === '' ? $this->first($deptNo, $limit) : $this->matching($deptNo, $term, $limit);
 
@@ -36,13 +44,39 @@ class DepartmentMemberSearch
             ->where('to_date', self::CURRENT)
             ->pluck('title', 'emp_no');
 
+        $managers = $this->managerRoles($deptNo, $rows->pluck('emp_no'));
+
         return $rows->map(fn ($row) => (object) [
             'emp_no' => (int) $row->emp_no,
             'first_name' => $row->first_name,
             'last_name' => $row->last_name,
             'since' => $row->since,
             'title' => $titles[$row->emp_no] ?? null,
+            'manager' => $managers[$row->emp_no] ?? null,
         ]);
+    }
+
+    /**
+     * emp_no => "current" or "former", for those who managed the department.
+     *
+     * @param  Collection<int, int|string>  $empNos
+     * @return array<int, string>
+     */
+    private function managerRoles(string $deptNo, Collection $empNos): array
+    {
+        $roles = [];
+
+        $periods = DB::table('dept_manager')
+            ->where('dept_no', $deptNo)
+            ->whereIn('emp_no', $empNos)
+            ->get(['emp_no', 'to_date']);
+
+        foreach ($periods as $period) {
+            $current = $period->to_date === self::CURRENT;
+            $roles[$period->emp_no] = $current || ($roles[$period->emp_no] ?? null) === 'current' ? 'current' : 'former';
+        }
+
+        return $roles;
     }
 
     /**
