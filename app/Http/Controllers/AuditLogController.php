@@ -10,6 +10,7 @@ use App\Support\Ability;
 use App\Support\AuditLogPresenter;
 use App\Support\EmployeeVisibility;
 use Carbon\CarbonImmutable;
+use DateTimeImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -46,6 +47,8 @@ class AuditLogController extends Controller
 
     public function index(Request $request): View
     {
+        $this->dropInvalidCursor($request);
+
         $filters = $this->filters($request);
         $withSecurity = $request->user()->can(Ability::MANAGE_USERS);
         $subjectTypes = Cache::remember('audit_log:subject_types', self::OPTIONS_TTL,
@@ -90,6 +93,33 @@ class AuditLogController extends Controller
                     ->all(),
             ),
         ]);
+    }
+
+    /**
+     * The cursor comes from the URL: a value the paginator did not write would end in
+     * an error or an invalid query, so it is dropped and the first page is shown.
+     */
+    private function dropInvalidCursor(Request $request): void
+    {
+        $cursor = $request->query('cursor');
+
+        if ($cursor !== null && ! (is_string($cursor) && $this->isValidCursor($cursor))) {
+            $request->query->remove('cursor');
+        }
+    }
+
+    private function isValidCursor(string $encoded): bool
+    {
+        $data = json_decode((string) base64_decode(str_replace(['-', '_'], ['+', '/'], $encoded)), true);
+
+        if (! is_array($data) || count($data) !== 3 || ! is_bool($data['_pointsToNextItems'] ?? null)
+            || ! is_int($data['id'] ?? null) || ! is_string($data['created_at'] ?? null)) {
+            return false;
+        }
+
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $data['created_at']);
+
+        return $date !== false && $date->format('Y-m-d H:i:s') === $data['created_at'];
     }
 
     /**

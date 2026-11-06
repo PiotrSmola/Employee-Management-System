@@ -7,6 +7,8 @@ use App\Models\ActivityLog;
 use App\Models\Department;
 use App\Models\User;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 class AuditLogPageTest extends HrOperationsTestCase
 {
@@ -149,6 +151,37 @@ class AuditLogPageTest extends HrOperationsTestCase
         $this->get($next)->assertOk()->assertSee('X1')->assertDontSee('Other-Action');
     }
 
+    public function test_a_tampered_cursor_shows_the_first_page(): void
+    {
+        for ($i = 1; $i <= 27; $i++) {
+            $this->entry('employee.updated', 'employee', '10001', ['after' => ['last_name' => sprintf('Marker%02d', $i)]],
+                at: Carbon::parse('2026-01-01 00:00:00')->addMinutes($i)->toDateTimeString());
+        }
+        $encode = fn (mixed $value) => rtrim(strtr(base64_encode((string) json_encode($value)), '+/', '-_'), '=');
+        $pointer = ['created_at' => '2026-01-01 00:10:00', 'id' => 5, '_pointsToNextItems' => true];
+
+        $tampered = [
+            'e30', 'NQ', 'not base64 %%%', 'bnVsbA', $encode([]), $encode('text'), $encode([1, 2]),
+            $encode(['created_at' => '2026-01-01 00:10:00']),
+            $encode([...$pointer, 'id' => 'x']),
+            $encode([...$pointer, 'id' => '5 OR 1=1']),
+            $encode([...$pointer, 'created_at' => 'yesterday']),
+            $encode([...$pointer, 'created_at' => '2026-13-45 00:00:00']),
+            $encode([...$pointer, 'created_at' => ['a']]),
+            $encode([...$pointer, '_pointsToNextItems' => 'yes']),
+            $encode([...$pointer, 'extra' => 1]),
+        ];
+
+        foreach ($tampered as $cursor) {
+            $this->get(route('audit-log.index', ['cursor' => $cursor]))
+                ->assertOk()
+                ->assertSee('Marker27');
+        }
+
+        $this->get(route('audit-log.index').'?cursor[]=x')->assertOk()->assertSee('Marker27');
+        $this->get(route('audit-log.index', ['cursor' => $encode($pointer)]))->assertOk()->assertDontSee('Marker27');
+    }
+
     public function test_out_of_range_dates_are_ignored(): void
     {
         $this->entry('employee.hired', 'employee', '10001', ['after' => ['first_name' => 'Marker-A']]);
@@ -180,13 +213,13 @@ class AuditLogPageTest extends HrOperationsTestCase
     {
         $this->entry('employee.hired', 'employee', '1');
 
-        $plan = collect(\Illuminate\Support\Facades\DB::select(
+        $plan = collect(DB::select(
             "EXPLAIN SELECT * FROM activity_log WHERE action_group = 'employee' ORDER BY created_at DESC, id DESC LIMIT 26"
         ))->first();
 
         $this->assertStringContainsString('action_group_created_at', (string) $plan->possible_keys);
         $this->assertStringNotContainsString('filesort', (string) $plan->Extra);
-        $this->assertSame('employee', \Illuminate\Support\Facades\DB::table('activity_log')->value('action_group'));
+        $this->assertSame('employee', DB::table('activity_log')->value('action_group'));
     }
 
     public function test_the_filter_lists_are_cached_briefly(): void
@@ -197,7 +230,7 @@ class AuditLogPageTest extends HrOperationsTestCase
         $this->entry('employee.special_case', 'employee', '1');
         $this->get(route('audit-log.index'))->assertDontSee('<option value="employee.special_case"', false);
 
-        \Illuminate\Support\Facades\Cache::flush();
+        Cache::flush();
         $this->get(route('audit-log.index'))->assertSee('<option value="employee.special_case"', false);
     }
 }
