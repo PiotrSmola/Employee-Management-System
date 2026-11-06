@@ -860,8 +860,7 @@ class EmployeeOperationsService
     private function undoBlockedReason(ActivityLog $entry, int $empNo): ?string
     {
         return match (true) {
-            $entry->action === 'employee.hired'
-                => __('A hire cannot be undone. Correct the personal data, or terminate the employment.'),
+            $entry->action === 'employee.hired' => __('A hire cannot be undone. Correct the personal data, or terminate the employment.'),
             ! in_array($entry->action, self::UNDOABLE_ACTIONS, true) || ! isset($entry->changes['_undo']['ops'], $entry->changes['_undo']['state']) => __('The last change cannot be undone.'),
             $entry->created_at->lt(now()->subHours(self::UNDO_HOURS)) => __('Changes can only be undone within :hours hours.', ['hours' => self::UNDO_HOURS]),
             ! hash_equals($entry->changes['_undo']['state'], $this->stateHash($empNo)) => __('The records of this employee were changed after the last change, so it cannot be undone any more.'),
