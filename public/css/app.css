@@ -683,3 +683,8 @@ th[style*="cursor: pointer"]:hover {
     --bs-btn-active-bg: #93c5fd;
     --bs-btn-active-border-color: #93c5fd;
 }
+
+/* Report tabs: the global .nav-link colour is meant for the navbar */
+.reports-tabs .nav-link {
+    color: var(--bs-body-color) !important;
+}
