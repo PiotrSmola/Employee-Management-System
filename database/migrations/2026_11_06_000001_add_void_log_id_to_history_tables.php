@@ -24,9 +24,14 @@ use Illuminate\Support\Facades\Schema;
  *   one on dept_no its `dept_no` index.
  * - InnoDB secondary indexes contain the primary key columns, so the directory
  *   indexes stay covering for queries with void_log_id = 0.
- * - down() leaves a table with voided rows as it is. Without voided rows it drops
- *   the column and restores the old key; dept_emp / dept_manager keep from_date
- *   in the key if an employee has several periods in one department.
+ * - down() refuses the whole rollback if any table has voided rows (the column is
+ *   their only mark: dropping it would bring undone rows back). Otherwise it drops the
+ *   column and restores the old key; dept_emp / dept_manager keep from_date in the
+ *   key if an employee has several periods in one department.
+ * - MySQL only (information_schema, online ALTER TABLE), like the rest of the application.
+ *
+ * void_log_id points at activity_log.id: never truncate activity_log, the ids would
+ * be handed out again and voided rows would point at unrelated entries.
  */
 return new class extends Migration
 {
@@ -45,6 +50,8 @@ return new class extends Migration
 
     public function up(): void
     {
+        $this->assertMysql();
+
         foreach (self::KEYS as $table => $key) {
             if (! Schema::hasTable($table)) {
                 continue;
@@ -67,14 +74,17 @@ return new class extends Migration
 
     public function down(): void
     {
+        $this->assertMysql();
+
+        foreach (array_keys(self::KEYS) as $table) {
+            if (Schema::hasTable($table) && Schema::hasColumn($table, self::COLUMN)
+                && DB::table($table)->where(self::COLUMN, '<>', 0)->exists()) {
+                throw new RuntimeException("Rollback refused: {$table} has voided rows, which would become active again.");
+            }
+        }
+
         foreach (self::KEYS as $table => $key) {
             if (! Schema::hasTable($table) || ! Schema::hasColumn($table, self::COLUMN)) {
-                continue;
-            }
-
-            if (DB::table($table)->where(self::COLUMN, '<>', 0)->exists()) {
-                $this->warn("{$table}: voided rows exist, the column and the primary key are kept.");
-
                 continue;
             }
 
@@ -95,6 +105,13 @@ return new class extends Migration
                 'ADD PRIMARY KEY ('.DB::getQueryGrammar()->columnize($restore).')',
                 'DROP COLUMN `'.self::COLUMN.'`',
             ]);
+        }
+    }
+
+    private function assertMysql(): void
+    {
+        if (DB::getDriverName() !== 'mysql') {
+            throw new RuntimeException('This migration needs MySQL (information_schema, online ALTER TABLE).');
         }
     }
 

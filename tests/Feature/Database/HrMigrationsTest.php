@@ -6,6 +6,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use RuntimeException;
 use Tests\TestCase;
 
 /**
@@ -132,19 +133,50 @@ class HrMigrationsTest extends TestCase
         $this->assertSame(1, DB::table('dept_emp')->count());
     }
 
-    public function test_down_keeps_from_date_for_repeated_periods_and_everything_for_voided_rows(): void
+    public function test_down_keeps_from_date_for_repeated_periods(): void
     {
         $this->seedHistory();
         DB::table('dept_emp')->insert(['emp_no' => 1, 'dept_no' => 'd001', 'from_date' => '2000-01-01', 'to_date' => '9999-01-01']);
-        DB::table('salaries')->insert(['emp_no' => 1, 'salary' => 1, 'from_date' => '2000-01-01', 'to_date' => '9999-01-01', 'void_log_id' => 5]);
 
         $this->migration(self::PRIMARY_KEYS)->down();
 
         $this->assertSame(['emp_no', 'dept_no', 'from_date'], $this->primaryKey('dept_emp'));
         $this->assertFalse(Schema::hasColumn('dept_emp', 'void_log_id'));
-        $this->assertSame(['emp_no', 'from_date', 'void_log_id'], $this->primaryKey('salaries'));
-        $this->assertTrue(Schema::hasColumn('salaries', 'void_log_id'));
+        $this->assertSame(['emp_no', 'dept_no'], $this->primaryKey('dept_manager'));
         $this->assertSame(2, DB::table('dept_emp')->count());
+    }
+
+    public function test_the_whole_rollback_is_refused_while_voided_rows_exist(): void
+    {
+        $this->seedHistory();
+        DB::table('salaries')->insert(['emp_no' => 1, 'salary' => 1, 'from_date' => '2000-01-01', 'to_date' => '9999-01-01', 'void_log_id' => 5]);
+
+        try {
+            $this->migration(self::PRIMARY_KEYS)->down();
+            $this->fail('The rollback must be refused.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('salaries has voided rows', $e->getMessage());
+        }
+
+        foreach (['dept_emp', 'dept_manager', 'titles', 'salaries'] as $table) {
+            $this->assertTrue(Schema::hasColumn($table, 'void_log_id'), "{$table} stays as it is, also the ones without voided rows.");
+        }
+        $this->assertSame(['emp_no', 'dept_no', 'from_date', 'void_log_id'], $this->primaryKey('dept_emp'));
+    }
+
+    public function test_the_migration_needs_mysql(): void
+    {
+        $database = DB::getFacadeRoot();
+        DB::shouldReceive('getDriverName')->andReturn('sqlite');
+
+        try {
+            $this->migration(self::PRIMARY_KEYS)->up();
+            $this->fail('Other databases must be refused.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('needs MySQL', $e->getMessage());
+        } finally {
+            DB::swap($database);
+        }
     }
 
     public function test_the_audit_log_gets_its_filter_indexes_idempotently(): void
