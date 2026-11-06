@@ -344,7 +344,10 @@ class EmployeeSearchQuery
             $query->whereIntegerNotInRaw('e.emp_no', $this->exceptIds);
         }
 
-        if ($f->hasSearch()) {
+        if ($f->searchesEmployeeNumber()) {
+            // A number is an employee number: exact primary-key match (no name scan).
+            $query->where('e.emp_no', $f->employeeNumber());
+        } elseif ($f->hasSearch()) {
             $term = '%'.$f->search.'%';
             $query->where(function ($q) use ($term) {
                 $q->where('e.first_name', 'like', $term)

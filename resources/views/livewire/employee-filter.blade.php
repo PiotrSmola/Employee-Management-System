@@ -22,7 +22,7 @@
                         <i class="bi bi-search"></i>
                     </span>
                     <input type="text" class="form-control form-control-lg"
-                        placeholder="Search by first name, last name, or full name..."
+                        placeholder="Search by name or employee number..."
                         wire:model.live.debounce.300ms="search">
                     @if ($search)
                         <button class="btn btn-outline-secondary" type="button" wire:click="$set('search', '')">

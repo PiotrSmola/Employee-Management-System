@@ -12,6 +12,9 @@ final class EmployeeFilters
 
     public const STATUSES = ['all', 'current', 'former'];
 
+    /** Largest value of the employees.emp_no column (signed INT). */
+    public const MAX_EMP_NO = 2147483647;
+
     public function __construct(
         public readonly string $search = '',
         public readonly string $employmentStatus = 'all',
@@ -65,6 +68,29 @@ final class EmployeeFilters
     public function hasSearch(): bool
     {
         return $this->search !== '';
+    }
+
+    /**
+     * Is the search term an employee number (digits only, surrounding spaces and a
+     * leading "#" allowed)? Such a term matches exactly that employee, never names.
+     */
+    public function searchesEmployeeNumber(): bool
+    {
+        return $this->employeeNumber() !== null;
+    }
+
+    /**
+     * The employee number searched for, or null when the term is not a number.
+     */
+    public function employeeNumber(): ?int
+    {
+        $term = ltrim(trim($this->search), '#');
+
+        if ($term === '' || ! ctype_digit($term) || strlen($term) > 10 || (int) $term > self::MAX_EMP_NO) {
+            return null;
+        }
+
+        return (int) $term;
     }
 
     public function filtersByDepartment(): bool

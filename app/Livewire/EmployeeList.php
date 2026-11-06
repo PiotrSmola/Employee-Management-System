@@ -8,6 +8,7 @@ use App\Support\Ability;
 use App\Support\EmployeeVisibility;
 use Illuminate\Support\Facades\Gate;
 use Livewire\Attributes\Locked;
+use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithPagination;
 
@@ -17,22 +18,40 @@ class EmployeeList extends Component
 
     public const PER_PAGE = 20;
 
+    /** Filter properties kept in the URL. */
+    public const URL_FILTERS = ['search', 'employmentStatus', 'gender', 'department', 'jobTitleFilter', 'salaryMin', 'salaryMax'];
+
+    /*
+     * Filters, sort order and page are kept in the URL (?search=..&department=..&sort=..&page=2):
+     * a filtered list can be shared as a link, and Back (e.g. from a profile) returns to it.
+     * Each change adds a browser history entry; Back / Forward restore the previous values
+     * (see updated()). Default values are left out of the URL.
+     */
+    #[Url(as: 'search', history: true, except: '')]
     public $search = '';
 
+    #[Url(as: 'status', history: true, except: 'all')]
     public $employmentStatus = 'all';
 
+    #[Url(as: 'gender', history: true, except: 'all')]
     public $gender = 'all';
 
+    #[Url(as: 'department', history: true, except: 'all')]
     public $department = 'all';
 
+    #[Url(as: 'salary_min', history: true, except: '')]
     public $salaryMin = '';
 
+    #[Url(as: 'salary_max', history: true, except: '')]
     public $salaryMax = '';
 
+    #[Url(as: 'title', history: true, except: 'all')]
     public $jobTitleFilter = 'all';
 
+    #[Url(as: 'sort', history: true, except: 'emp_no')]
     public $sortBy = 'emp_no';
 
+    #[Url(as: 'direction', history: true, except: 'asc')]
     public $sortDirection = 'asc';
 
     public $selectAll = true;
@@ -62,6 +81,10 @@ class EmployeeList extends Component
 
     public function mount()
     {
+        // Values from the URL are user input: normalized like any other filter payload.
+        $this->applyFilterValues($this->propertyFilters());
+        $this->normalizeSort();
+
         $this->selectAll = true;
         $this->selectedEmployees = [];
         $this->excludedEmployees = [];
@@ -78,18 +101,27 @@ class EmployeeList extends Component
             return;
         }
 
-        $sanitized = EmployeeFilters::fromArray($filters);
-
-        $this->search = $sanitized->search;
-        $this->employmentStatus = $sanitized->employmentStatus;
-        $this->gender = $sanitized->gender;
-        $this->department = $sanitized->department;
-        $this->salaryMin = $sanitized->salaryMin === null ? '' : (string) $sanitized->salaryMin;
-        $this->salaryMax = $sanitized->salaryMax === null ? '' : (string) $sanitized->salaryMax;
-        $this->jobTitleFilter = $sanitized->jobTitle;
+        $this->applyFilterValues($filters);
 
         $this->resetPage();
         $this->resetSelection();
+    }
+
+    /**
+     * A filter or the sort order was set directly from the client: the browser's Back /
+     * Forward button restoring an earlier URL (the filter inputs live in EmployeeFilter,
+     * which uses updateFilters()). The page belongs to the same URL, so it is kept; the
+     * selection is reset as for any filter change and the filter inputs follow.
+     */
+    public function updated($property)
+    {
+        if (in_array($property, self::URL_FILTERS, true)) {
+            $this->applyFilterValues($this->propertyFilters());
+            $this->resetSelection();
+            $this->dispatch('filtersRestored', $this->filterInputValues())->to(EmployeeFilter::class);
+        } elseif (in_array($property, ['sortBy', 'sortDirection'], true)) {
+            $this->normalizeSort();
+        }
     }
 
     public function sortByField($field)
@@ -274,6 +306,66 @@ class EmployeeList extends Component
             'sortBy' => $this->sortBy,
             'sortDirection' => $this->sortDirection,
         ]);
+    }
+
+    /**
+     * Set the filter properties from loosely typed input, normalized by EmployeeFilters.
+     *
+     * @param  array<string, mixed>  $filters
+     */
+    private function applyFilterValues(array $filters): void
+    {
+        $sanitized = EmployeeFilters::fromArray($filters);
+
+        $this->search = $sanitized->search;
+        $this->employmentStatus = $sanitized->employmentStatus;
+        $this->gender = $sanitized->gender;
+        $this->department = $sanitized->department;
+        $this->salaryMin = $sanitized->salaryMin === null ? '' : (string) $sanitized->salaryMin;
+        $this->salaryMax = $sanitized->salaryMax === null ? '' : (string) $sanitized->salaryMax;
+        $this->jobTitleFilter = $sanitized->jobTitle;
+    }
+
+    private function normalizeSort(): void
+    {
+        $sanitized = EmployeeFilters::fromArray(['sortBy' => $this->sortBy, 'sortDirection' => $this->sortDirection]);
+
+        $this->sortBy = $sanitized->sortBy;
+        $this->sortDirection = $sanitized->sortDirection;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function propertyFilters(): array
+    {
+        return [
+            'search' => $this->search,
+            'employmentStatus' => $this->employmentStatus,
+            'gender' => $this->gender,
+            'department' => $this->department,
+            'jobTitle' => $this->jobTitleFilter,
+            'salaryMin' => $this->salaryMin,
+            'salaryMax' => $this->salaryMax,
+        ];
+    }
+
+    /**
+     * The filter properties in the shape of EmployeeFilter's inputs.
+     *
+     * @return array<string, string>
+     */
+    public function filterInputValues(): array
+    {
+        return [
+            'search' => (string) $this->search,
+            'employmentStatus' => (string) $this->employmentStatus,
+            'gender' => (string) $this->gender,
+            'department' => (string) $this->department,
+            'jobTitle' => (string) $this->jobTitleFilter,
+            'salaryMin' => (string) $this->salaryMin,
+            'salaryMax' => (string) $this->salaryMax,
+        ];
     }
 
     private function searchQuery(): EmployeeSearchQuery
