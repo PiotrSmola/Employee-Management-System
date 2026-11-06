@@ -1,10 +1,4 @@
 {{-- Department (not for managers) and as-of date. GET form: every state of the page is a link. --}}
-@php
-    $presets = [null => __('Current')];
-    foreach ([2000, 1995, 1990] as $year) {
-        $presets[$year . '-12-31'] = __('End of :year', ['year' => $year]);
-    }
-@endphp
 <div class="card mb-4">
     <div class="card-body">
         <form method="GET" action="{{ url()->current() }}" class="row g-3 align-items-end">
@@ -22,8 +16,7 @@
             <div class="col-sm-6 col-lg-3">
                 <label for="report-as-of" class="form-label fw-semibold">{{ __('As of date') }}</label>
                 <input type="date" id="report-as-of" name="as_of" class="form-control"
-                    value="{{ $context->current ? '' : $context->date() }}" max="{{ now()->toDateString() }}"
-                    min="{{ \App\Reports\ReportContext::EARLIEST_YEAR }}-01-01">
+                    value="{{ $page->asOfValue() }}" max="{{ $page->latestDate() }}" min="{{ $page->earliestDate() }}">
             </div>
             <div class="col-12 col-lg-auto">
                 <button type="submit" class="btn btn-primary">
@@ -32,10 +25,8 @@
             </div>
             <div class="col-12 col-lg">
                 <div class="d-flex flex-wrap gap-2 justify-content-lg-end" role="group" aria-label="{{ __('Quick dates') }}">
-                    @foreach ($presets as $date => $label)
-                        @php $active = $date === '' ? $context->current : (! $context->current && $context->date() === $date); @endphp
-                        <a href="{{ url()->current() . '?' . http_build_query(array_filter(['department' => $context->isDepartmentScoped() ? null : $context->department, 'as_of' => $date ?: null])) }}"
-                            class="btn btn-sm {{ $active ? 'btn-secondary' : 'btn-outline-secondary' }}">{{ $label }}</a>
+                    @foreach ($page->quickDates(url()->current()) as $quick)
+                        <a href="{{ $quick['url'] }}" class="btn btn-sm {{ $quick['active'] ? 'btn-secondary' : 'btn-outline-secondary' }}">{{ $quick['label'] }}</a>
                     @endforeach
                 </div>
             </div>

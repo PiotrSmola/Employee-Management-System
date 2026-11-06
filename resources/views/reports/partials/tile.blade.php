@@ -1,4 +1,4 @@
-{{-- One summary figure: $gradient (1-4), $icon, $value, $label --}}
+{{-- One summary figure (ReportPage::tiles()): $gradient, $icon, $value, $label --}}
 <div class="col-6 col-lg-3">
     <div class="card gradient-card-{{ $gradient }} text-white h-100 report-tile">
         <div class="card-body text-center">

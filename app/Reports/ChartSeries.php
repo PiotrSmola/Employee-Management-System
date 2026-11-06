@@ -4,7 +4,7 @@ namespace App\Reports;
 
 /**
  * Helpers for chart descriptions (see ReportTable). Series colours are palette
- * slots 0-7 assigned in a fixed order (resources/views/reports/partials/scripts);
+ * slots 0-7 assigned in a fixed order (public/js/reports.js);
  * a chart never gets more than 8 coloured series - the rest is folded into one
  * grey "Other" series (the table always has every value).
  */

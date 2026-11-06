@@ -1,11 +1,5 @@
-@php
-    $isCompensation = $section === \App\Reports\ReportCatalog::COMPENSATION;
-    $pageName = $isCompensation ? __('Compensation') : __('Workforce');
-    // Reports drawn at half width on large screens; the others use the full width.
-    $halfWidth = ['tenure', 'age', 'salary-departments', 'salary-titles', 'salary-distribution', 'salary-growth'];
-@endphp
 @include('layouts.html')
-@include('layouts.head', ['pageTitle' => __('Reports') . ' - ' . $pageName . ' - Employee Management System'])
+@include('layouts.head', ['pageTitle' => __('Reports') . ' - ' . $page->name() . ' - Employee Management System'])
 
 <body style="display: flex; flex-direction: column; min-height: 100vh;">
     @include('layouts.navbar')
@@ -15,7 +9,7 @@
             <ol class="breadcrumb">
                 <li class="breadcrumb-item"><a href="{{ route('index') }}">Dashboard</a></li>
                 <li class="breadcrumb-item"><a href="{{ route('reports.index', $context->query()) }}">{{ __('Reports') }}</a></li>
-                <li class="breadcrumb-item active">{{ $pageName }}</li>
+                <li class="breadcrumb-item active">{{ $page->name() }}</li>
             </ol>
         </nav>
 
@@ -26,22 +20,22 @@
             @if ($context->isDepartmentScoped())
                 <span class="badge text-bg-warning role-badge">
                     <i class="bi bi-diagram-3 me-1"></i>
-                    {{ __('Your department: :name', ['name' => $context->department ? ($departments[$context->department] ?? $context->department) : __('none assigned')]) }}
+                    {{ $page->scopeLabel() }}
                 </span>
             @endif
         </div>
 
         <ul class="nav nav-tabs mb-3 reports-tabs">
             <li class="nav-item">
-                <a class="nav-link {{ $isCompensation ? '' : 'active' }}" href="{{ route('reports.workforce', $context->query()) }}"
-                    @unless ($isCompensation) aria-current="page" @endunless>
+                <a class="nav-link @unless ($page->isCompensation()) active @endunless" href="{{ route('reports.workforce', $context->query()) }}"
+                    @unless ($page->isCompensation()) aria-current="page" @endunless>
                     <i class="bi bi-people me-1"></i>{{ __('Workforce') }}
                 </a>
             </li>
             @can('view-salaries')
                 <li class="nav-item">
-                    <a class="nav-link {{ $isCompensation ? 'active' : '' }}" href="{{ route('reports.compensation', $context->query()) }}"
-                        @if ($isCompensation) aria-current="page" @endif>
+                    <a class="nav-link @if ($page->isCompensation()) active @endif" href="{{ route('reports.compensation', $context->query()) }}"
+                        @if ($page->isCompensation()) aria-current="page" @endif>
                         <i class="bi bi-currency-dollar me-1"></i>{{ __('Compensation') }}
                     </a>
                 </li>
@@ -60,11 +54,15 @@
             </div>
         @endif
 
-        @include($isCompensation ? 'reports.partials.summary-compensation' : 'reports.partials.summary-workforce')
+        <div class="row g-3 mb-4">
+            @foreach ($page->tiles() as $tile)
+                @include('reports.partials.tile', $tile)
+            @endforeach
+        </div>
 
         <div class="row g-4">
             @foreach ($tables as $table)
-                <div class="{{ in_array($table->key, $halfWidth, true) ? 'col-xl-6' : 'col-12' }}">
+                <div class="{{ $table->widthClass() }}">
                     @include('reports.partials.card', ['table' => $table])
                 </div>
             @endforeach

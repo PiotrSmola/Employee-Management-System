@@ -1,0 +1,29 @@
+/* Report pages (resources/views/reports). */
+.reports-page .report-card:hover {
+    transform: none;
+}
+
+.reports-page .report-chart {
+    position: relative;
+    width: 100%;
+}
+
+.reports-page .report-table {
+    max-height: 420px;
+    overflow-y: auto;
+}
+
+.reports-page .report-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bs-body-bg);
+    z-index: 1;
+}
+
+.reports-page .report-table tfoot td {
+    border-top: 2px solid var(--bs-border-color);
+}
+
+.reports-page .report-tile .card-body {
+    padding: 1rem 0.5rem;
+}

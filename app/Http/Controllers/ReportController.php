@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Department;
 use App\Reports\ReportCatalog;
 use App\Reports\ReportContext;
+use App\Reports\ReportPage;
 use App\Support\Ability;
 use App\Support\EmployeeVisibility;
 use Illuminate\Http\RedirectResponse;
@@ -69,13 +70,16 @@ class ReportController extends Controller
         $errors = [];
         $context = ReportContext::fromInput(EmployeeVisibility::for($request->user()), $request->query(), $errors);
 
+        $summary = $this->catalog->summary($section, $context);
+        $departments = Department::query()->orderBy('dept_no')->pluck('dept_name', 'dept_no')->all();
+
         return view('reports.show', [
-            'section' => $section,
+            'page' => new ReportPage($section, $context, $summary, $departments),
             'context' => $context,
             'inputErrors' => $errors,
-            'summary' => $this->catalog->summary($section, $context),
+            'summary' => $summary,
             'tables' => $this->catalog->tables($section, $context),
-            'departments' => Department::query()->orderBy('dept_no')->pluck('dept_name', 'dept_no'),
+            'departments' => $departments,
         ]);
     }
 
