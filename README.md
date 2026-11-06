@@ -160,6 +160,24 @@ who can change it under **My account**. Deactivated users cannot sign in and are
 on their next request; resetting a password signs the user out everywhere. Administrators cannot
 delete, deactivate or demote themselves, and the last active administrator is protected.
 
+## HR Operations and Audit Log
+
+Administrators and HR staff (`manage-employees`) hire employees (**Add employee** in the
+directory) and, from the **HR actions** card of a profile, edit personal data, transfer
+employees, change titles (promotion / demotion) and salaries (amount or %), terminate and
+rehire employees, and correct a typo in the latest salary or title. History is never deleted:
+a change closes the current record and starts a new one on the effective date (today or
+earlier, after the start of the current record); a return to a department the employee belonged
+to before adds a new period. Transferring or terminating a department manager ends the
+management. Unusual salary changes (beyond -50 % / +100 %) and possible duplicate hires need an
+explicit confirmation, and the most recent change of an employee (except a hire) can be undone
+within 24 hours while nothing else changed.
+
+Every change is recorded in the audit log. Administrators and HR (`view-audit-log`) see it under
+**Audit log** in the user menu (filters: action, subject, user, date range) and as **Change
+history** on each profile. Rules, decisions and the logged payloads:
+[docs/HR_OPERATIONS.md](docs/HR_OPERATIONS.md).
+
 ## Manual Installation
 
 ### 1. Clone the Repository
@@ -368,6 +386,10 @@ The application provides the following main routes:
 - `POST /employees/export` - Bulk export functionality (`export-data`)
 - `GET /employees/{emp_no}/export-pdf` - Individual PDF export
 - `GET /account`, `PUT /account/profile`, `PUT /account/password` - My account
+- `GET /employees/create`, `POST /employees` - Hire an employee (`manage-employees`)
+- `PUT /employees/{emp_no}`, `POST /employees/{emp_no}/transfer|title|salary|terminate|rehire|undo`,
+  `PUT /employees/{emp_no}/salary/latest|title/latest` - HR operations (`manage-employees`, see docs/HR_OPERATIONS.md)
+- `GET /audit-log` - Audit log (`view-audit-log`)
 - `/users` (resource without `show`), `PUT /users/{user}/password` - User management (`manage-users`)
 
 ## Configuration

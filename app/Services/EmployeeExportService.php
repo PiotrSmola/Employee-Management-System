@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Queries\EmployeeSearchQuery;
+use App\Support\HistoryRows;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpFoundation\Response;
@@ -137,7 +138,7 @@ class EmployeeExportService
             return [];
         }
 
-        return DB::table('salaries')
+        return HistoryRows::active(DB::table('salaries'))
             ->select('emp_no', DB::raw('SUM(salary) as total_salary'))
             ->whereIntegerInRaw('emp_no', $ids)
             ->groupBy('emp_no')

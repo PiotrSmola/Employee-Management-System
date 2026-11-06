@@ -40,6 +40,7 @@ order. Add a file instead of editing `navbar.blade.php`. Existing slots:
 | `main/20-employees` | All Employees, Export Data |
 | `main/90-users` | Users (admins) |
 | `user/10-account` | My account |
+| `user/60-audit-log` | Audit log (admins, HR) |
 | `user/90-users` | Users (admins) |
 
 Suggested numbers: departments `30`, reports `40`, data tools `50`, audit log `60`
@@ -122,7 +123,12 @@ Signature: `AuditLogger::log(string $action, string $subjectType, string|int|nul
 
 - `action` is `<subject>.<verb>` in snake case: `employee.hired`, `employee.transferred`,
   `employee.promoted`, `employee.salary_changed`, `employee.terminated`, `department.created`,
-  `department.manager_assigned`, `data.imported`, ... Existing ones: `user.created`,
+  `department.manager_assigned`, `data.imported`, ... HR operations write `employee.hired`,
+  `employee.updated`, `employee.transferred`, `employee.promoted`, `employee.demoted`,
+  `employee.title_changed`, `employee.salary_changed`, `employee.terminated`,
+  `employee.rehired`, `employee.salary_corrected`, `employee.title_corrected`,
+  `employee.change_undone` (payloads in [HR_OPERATIONS.md](HR_OPERATIONS.md); their `_undo`
+  key is internal data of the undo, keys starting with `_` are never displayed). Existing ones: `user.created`,
   `user.updated`, `user.role_changed`, `user.password_reset`, `user.password_changed`,
   `user.deleted`, `auth.login`, `auth.login_failed` (`changes`: `email`, `reason`).
 - `subjectType` is a short alias (`ActivityLog::SUBJECT_EMPLOYEE|DEPARTMENT|USER`; add a
@@ -136,8 +142,49 @@ Signature: `AuditLogger::log(string $action, string $subjectType, string|int|nul
   order, so compare `changes` with `assertEquals` in tests.
 - Reading: `ActivityLog::forSubject('employee', 10001)->latestFirst()->paginate()`, relation
   `user` (null when the account was deleted). Indexes: `created_at`,
-  `(subject_type, subject_id, created_at)`, `(action, created_at)`. Entries are never updated.
-- The audit log screen is behind `Ability::VIEW_AUDIT_LOG`.
+  `(subject_type, subject_id, created_at)`, `(action, created_at)`, `(action_group, created_at)`
+  (`action_group` = the part before the dot, a generated column), `(user_id, created_at)`.
+  Entries are never updated.
+- The audit log screen (`/audit-log`, route `audit-log.index`) is behind `Ability::VIEW_AUDIT_LOG`.
+  It renders any `changes` payload (`App\Support\AuditLogPresenter`): `before`/`after` pairs
+  as *before → after*, other keys as values, `dept_no` with the department name. Departments link to
+  `route('departments.show', $dept_no)` as soon as that route exists.
+
+## Reading the history tables: `App\Support\HistoryRows`
+
+`dept_emp`, `dept_manager`, `titles` and `salaries` can hold **voided rows**: undoing an HR
+operation never deletes anything, it sets `void_log_id` on the rows the operation added
+(0 = active row). Voided rows do not exist for the application, so **every query over these
+four tables must exclude them**:
+
+```php
+use App\Support\HistoryRows;
+
+HistoryRows::active(DB::table('salaries'))->where('emp_no', $empNo)->get();
+HistoryRows::active(DB::table('titles as t'), 't')->...;                                // alias
+HistoryRows::active($query->from('dept_emp as de'), 'de');                              // sub-query
+->leftJoin('titles as t', fn ($join) => HistoryRows::active($join->on('t.emp_no', '=', 'e.emp_no'), 't'))
+DB::raw('(SELECT ... FROM salaries s WHERE s.emp_no = e.emp_no AND '.HistoryRows::sql('s').')')
+->belongsToMany(...)->wherePivot(HistoryRows::COLUMN, HistoryRows::ACTIVE)
+```
+
+The models `Salary`, `Title`, `DeptEmp` and `DeptManager` apply it with a global scope, and
+`EmployeeSearchQuery::departmentMembership()` applies it itself. Never `DELETE` from these
+tables, never use `withoutGlobalScope(s)` on these models, and never truncate `activity_log`
+(`void_log_id` holds its ids). `tests/Feature/HrOperations/VoidedRowsGuardTest.php` fails for
+code under `app/` that reads them without the filter (a reasoned exception goes into its
+allowlist). `VoidedRowsRuntimeGuardTest` checks the SQL of the read paths: **add your new
+screen or report to its `readPaths()`**.
+
+## Changing employees: `App\Services\EmployeeOperationsService`
+
+Hire, transfer, title / salary changes, termination and rehire go through this service (it
+keeps the history shape, locks the employee, audits and flushes the cache). `dept_emp` and
+`dept_manager` have `from_date` in the primary key: an employee can have several periods in one
+department - pick the current one by `to_date = 9999-01-01` and the last one by
+the latest `to_date`, never by `(emp_no, dept_no)` alone. Code that inserts
+employees itself (e.g. an import) takes the number from `EmployeeNumberAllocator::next()`
+inside its transaction. See [HR_OPERATIONS.md](HR_OPERATIONS.md).
 
 ## Cached figures: `App\Support\EmployeeDataCache`
 

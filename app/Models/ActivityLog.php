@@ -5,9 +5,14 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 
 /**
  * One audit log entry - written by App\Services\AuditLogger, never updated.
+ *
+ * Inside this class `$entry->changes` is NOT the `changes` column: Eloquent's Model
+ * has a protected property of that name, which wins where it is accessible (here and
+ * in closures bound to the class). Use `$entry->getAttribute('changes')` in this class.
  *
  * @property int $id
  * @property int|null $user_id who did it (null: system, or a failed login)
@@ -16,7 +21,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string|null $subject_id emp_no / dept_no / user id
  * @property array<string, mixed>|null $changes {"before": {...}, "after": {...}} or a payload
  * @property string|null $ip
- * @property \Illuminate\Support\Carbon $created_at
+ * @property Carbon $created_at
  */
 class ActivityLog extends Model
 {
@@ -25,6 +30,9 @@ class ActivityLog extends Model
     public const SUBJECT_DEPARTMENT = 'department';
 
     public const SUBJECT_USER = 'user';
+
+    /** Entry of an undone HR operation; `changes.undone_entry_id` points at the original entry. */
+    public const ACTION_CHANGE_UNDONE = 'employee.change_undone';
 
     public const UPDATED_AT = null;
 
@@ -51,6 +59,38 @@ class ActivityLog extends Model
     public function scopeForSubject(Builder $query, string $type, string|int $id): void
     {
         $query->where('subject_type', $type)->where('subject_id', (string) $id);
+    }
+
+    /**
+     * The undo entries of $entries, by the id of the entry they undid. Entries are
+     * never updated, so "this was undone" is only recorded on the undo entry.
+     *
+     * @param  iterable<self>  $entries
+     * @return array<int, self>
+     */
+    public static function undoEntriesFor(iterable $entries): array
+    {
+        $subjects = collect($entries)
+            ->where('subject_type', self::SUBJECT_EMPLOYEE)
+            ->pluck('subject_id')
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($subjects === []) {
+            return [];
+        }
+
+        return self::query()
+            ->select(['id', 'user_id', 'created_at'])
+            ->selectRaw("CAST(JSON_EXTRACT(changes, '$.undone_entry_id') AS UNSIGNED) AS undone_entry_id")
+            ->with('user:id,name')
+            ->where('subject_type', self::SUBJECT_EMPLOYEE)
+            ->whereIn('subject_id', $subjects)
+            ->where('action', self::ACTION_CHANGE_UNDONE)
+            ->get()
+            ->keyBy('undone_entry_id')
+            ->all();
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\HistoryRows;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
@@ -30,12 +31,14 @@ class Employee extends Model
     public function departments()
     {
         return $this->belongsToMany(Department::class, 'dept_emp', 'emp_no', 'dept_no')
+            ->wherePivot(HistoryRows::COLUMN, HistoryRows::ACTIVE)
             ->withPivot('from_date', 'to_date');
     }
 
     public function currentDepartment()
     {
         return $this->belongsToMany(Department::class, 'dept_emp', 'emp_no', 'dept_no')
+            ->wherePivot(HistoryRows::COLUMN, HistoryRows::ACTIVE)
             ->withPivot('from_date', 'to_date')
             ->wherePivot('to_date', '9999-01-01')
             ->select('departments.dept_no', 'departments.dept_name');

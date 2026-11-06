@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Employee;
+use App\Support\HistoryRows;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -48,21 +49,21 @@ class EmployeeProfileService
             $employee->setRelation('currentSalary', null);
         }
 
-        $departmentHistory = DB::table('dept_emp')
+        $departmentHistory = HistoryRows::active(DB::table('dept_emp'), 'dept_emp')
             ->join('departments', 'dept_emp.dept_no', '=', 'departments.dept_no')
             ->where('dept_emp.emp_no', $employee->emp_no)
             ->select('departments.dept_name', 'departments.dept_no', 'dept_emp.from_date', 'dept_emp.to_date')
             ->orderBy('dept_emp.from_date')
             ->get();
 
-        $titleHistory = DB::table('titles')
+        $titleHistory = HistoryRows::active(DB::table('titles'))
             ->where('emp_no', $employee->emp_no)
             ->select('title', 'from_date', 'to_date')
             ->orderBy('from_date')
             ->get();
 
         $salaryHistory = $withSalaries
-            ? DB::table('salaries')
+            ? HistoryRows::active(DB::table('salaries'))
                 ->where('emp_no', $employee->emp_no)
                 ->select('salary', 'from_date', 'to_date')
                 ->orderBy('from_date')
