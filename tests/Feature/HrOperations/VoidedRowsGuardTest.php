@@ -7,67 +7,118 @@ use App\Models\DeptManager;
 use App\Models\Salary;
 use App\Models\Title;
 use Illuminate\Support\Facades\File;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
  * Static guard: code under app/ that reads the history tables must exclude voided
- * rows (App\Support\HistoryRows). A statement mentioning one of the tables needs as
- * many filters as it has table references; inserts are exempt.
+ * rows (App\Support\HistoryRows). Every single reference to one of the tables, by
+ * query builder or raw SQL, needs its own filter in the same statement:
  *
- * Accepted as a filter: HistoryRows::active / HistoryRows::sql / HistoryRows::COLUMN,
- * `void_log_id`, and EmployeeSearchQuery::departmentMembership(), which applies it.
+ *   HistoryRows::active(DB::table('salaries'))
+ *   HistoryRows::active(<query or join>, 'alias')
+ *   HistoryRows::sql('alias')  /  alias.void_log_id
+ *   ->wherePivot(HistoryRows::COLUMN, ...)
+ *   departmentMembership(): applies the filter to its `de_f`
+ *
+ * Inserts are exempt. Dynamic table names count as history tables. See also
+ * VoidedRowsRuntimeGuardTest, which checks the SQL the read paths really run.
  */
 class VoidedRowsGuardTest extends TestCase
 {
-    /** "relative path" => reason, for code that may read voided rows on purpose. */
+    /** "path relative to app/" => reason, for code that may touch voided rows on purpose. */
     private const ALLOWLIST = [
         // None so far.
     ];
 
     private const TABLES = 'dept_emp|dept_manager|titles|salaries';
 
-    public function test_no_query_over_the_history_tables_forgets_the_filter(): void
+    /** Words that can follow a table name in SQL without being its alias. */
+    private const NOT_AN_ALIAS = ['where', 'join', 'inner', 'left', 'right', 'cross', 'on', 'using', 'group', 'order', 'limit', 'having', 'union', 'set', 'as', 'for'];
+
+    public function test_no_reference_to_the_history_tables_forgets_the_filter(): void
     {
         $violations = [];
 
-        foreach (File::allFiles(app_path()) as $file) {
-            $path = str_replace('\\', '/', $file->getRelativePathname());
-
-            if (! isset(self::ALLOWLIST[$path])) {
-                array_push($violations, ...array_map(fn ($s) => $path.': '.$s, $this->violations($file->getContents())));
-            }
+        foreach ($this->sourceFiles() as $path => $source) {
+            array_push($violations, ...array_map(fn ($v) => $path.': '.$v, $this->violations($source)));
         }
 
         $this->assertSame([], $violations, 'Use App\Support\HistoryRows for these queries (docs/EXTENDING.md).');
     }
 
-    public function test_the_guard_notices_unfiltered_queries(): void
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function bypassProvider(): array
     {
-        $bad = [
-            "<?php DB::table('salaries')->where('emp_no', 1)->get();",
-            "<?php DB::table('dept_emp as de')->join('titles as t', 't.emp_no', '=', 'de.emp_no')->where('de.void_log_id', 0)->get();",
-            "<?php \$q->from('titles as t')->get();",
-            "<?php \$q->leftJoin('dept_manager as m', 'm.emp_no', '=', 'e.emp_no')->get();",
-            "<?php DB::select('SELECT * FROM salaries s WHERE s.emp_no = 1');",
-            "<?php DB::raw('(SELECT 1 FROM titles t JOIN salaries s ON s.emp_no = t.emp_no WHERE t.void_log_id = 0)');",
-            "<?php \$this->belongsToMany(Department::class, 'dept_emp', 'emp_no', 'dept_no');",
-            "<?php DB::table(\$table)->max('from_date');",
+        return [
+            'plain table' => ["<?php DB::table('salaries')->where('emp_no', 1)->get();"],
+            'second table in a statement with one filter' => ["<?php HistoryRows::active(DB::table('dept_emp as de'), 'de')->join('titles as t', 't.emp_no', '=', 'de.emp_no')->get();"],
+            'one filter counted for the wrong alias' => ["<?php \$q->join('titles as t', 'a', '=', 'b')->join('salaries as s', 'a', '=', 'b')->where('s.void_log_id', 0)->where('s.void_log_id', 0)->get();"],
+            'filter on another alias' => ["<?php HistoryRows::active(DB::table('titles as t'), 'x')->get();"],
+            'from' => ["<?php \$q->from('titles as t')->get();"],
+            'left join' => ["<?php \$q->leftJoin('dept_manager as m', 'm.emp_no', '=', 'e.emp_no')->get();"],
+            'cross join' => ["<?php \$q->crossJoin('salaries as s')->get();"],
+            'join where' => ["<?php \$q->joinWhere('salaries as s', 's.x', '=', 1)->get();"],
+            'left join sub' => ["<?php \$q->leftJoinSub(DB::table('titles'), 't', 'a', '=', 'b')->get();"],
+            'from sub' => ["<?php DB::query()->fromSub(DB::table('salaries'), 's')->get();"],
+            'from raw' => ["<?php DB::query()->fromRaw('salaries s')->get();"],
+            'raw select' => ["<?php DB::select('SELECT * FROM salaries s WHERE s.emp_no = 1');"],
+            'raw join with one filter' => ["<?php DB::raw('(SELECT 1 FROM titles t JOIN salaries s ON s.emp_no = t.emp_no WHERE t.void_log_id = 0)');"],
+            'raw lower case' => ["<?php DB::select('select * from titles where emp_no = 1');"],
+            'raw backticks' => ['<?php DB::select("SELECT * FROM `salaries` WHERE emp_no = 1");'],
+            'raw schema qualified' => ["<?php DB::select('SELECT * FROM employees.salaries s');"],
+            'raw schema qualified backticks' => ['<?php DB::select("SELECT * FROM `employees`.`dept_emp` de");'],
+            'raw comma join' => ["<?php DB::select('SELECT * FROM employees e, salaries s WHERE s.emp_no = e.emp_no');"],
+            'relation' => ["<?php \$this->belongsToMany(Department::class, 'dept_emp', 'emp_no', 'dept_no');"],
+            'variable table' => ["<?php DB::table(\$table)->max('from_date');"],
+            'variable with another name' => ["<?php DB::table(\$history)->max('from_date');"],
+            'variable from' => ['<?php $q->from($source)->get();'],
+            'variable join' => ["<?php \$q->join(\$source, 'a', '=', 'b')->get();"],
+            'constant table' => ['<?php DB::table(self::TABLE)->get();'],
+            'concatenated raw' => ["<?php DB::raw('SELECT 1 FROM '.\$table);"],
         ];
-        foreach ($bad as $code) {
-            $this->assertNotSame([], $this->violations($code), $code);
-        }
+    }
 
-        $good = [
-            "<?php HistoryRows::active(DB::table('salaries'))->get();",
-            "<?php DB::table('salaries')->insert(['emp_no' => 1]);",
-            '<?php DB::table($table)->insert($row);',
-            "<?php // DB::table('salaries')->get();\n",
-            "<?php DB::table('employees')->get(); \$label = 'titles';",
-            "<?php EmployeeSearchQuery::departmentMembership(DB::table('dept_emp as de_f'), 'd001');",
+    #[DataProvider('bypassProvider')]
+    public function test_the_guard_notices_a_bypass(string $code): void
+    {
+        $this->assertNotSame([], $this->violations($code), $code);
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function correctCodeProvider(): array
+    {
+        return [
+            'helper' => ["<?php HistoryRows::active(DB::table('salaries'))->get();"],
+            'helper with alias' => ["<?php HistoryRows::active(DB::table('salaries as s'), 's')->get();"],
+            'helper with the table name' => ["<?php HistoryRows::active(DB::table('dept_emp'), 'dept_emp')->join('departments', 'a', '=', 'b')->get();"],
+            'dynamic table with helper' => ['<?php HistoryRows::active(DB::table($table))->get();'],
+            'sub-query' => ["<?php HistoryRows::active(\$this->subSelect(\$q)->from('titles as t'), 't')->get();"],
+            'join' => ["<?php \$q->leftJoin('titles as t', function (\$join) { HistoryRows::active(\$join->on('a', '=', 'b'), 't')->where('x', 1); });"],
+            'two joins' => ["<?php \$q->join('titles as t', fn (\$j) => HistoryRows::active(\$j, 't'))->join('salaries as s', fn (\$j) => HistoryRows::active(\$j, 's'))->get();"],
+            'raw' => ["<?php DB::raw('SELECT 1 FROM salaries s WHERE '.HistoryRows::sql('s'));"],
+            'raw column' => ["<?php DB::select('SELECT 1 FROM salaries s WHERE s.void_log_id = 0');"],
+            'raw without alias' => ["<?php DB::select('SELECT 1 FROM salaries WHERE salaries.void_log_id = 0');"],
+            'pivot' => ["<?php \$this->belongsToMany(Department::class, 'dept_emp', 'emp_no', 'dept_no')->wherePivot(HistoryRows::COLUMN, HistoryRows::ACTIVE);"],
+            'insert' => ["<?php DB::table('salaries')->insert(['emp_no' => 1]);"],
+            'dynamic insert' => ['<?php DB::table($table)->insert($row);'],
+            'comment' => ["<?php // DB::table('salaries')->get();\n"],
+            'docblock' => ['<?php /** FROM salaries */ $a = 1;'],
+            'other tables' => ["<?php DB::table('employees')->get(); \$label = 'titles';"],
+            'the words in a sentence' => ["<?php __('Pick the month from salaries later');"],
+            'other methods' => ["<?php \$this->nextFrom('titles', \$empNo);"],
+            'membership' => ["<?php EmployeeSearchQuery::departmentMembership(DB::table('dept_emp as de_f'), 'd001');"],
         ];
-        foreach ($good as $code) {
-            $this->assertSame([], $this->violations($code), $code);
-        }
+    }
+
+    #[DataProvider('correctCodeProvider')]
+    public function test_the_guard_accepts_correct_code(string $code): void
+    {
+        $this->assertSame([], $this->violations($code), $code);
     }
 
     public function test_history_models_exclude_voided_rows(): void
@@ -77,40 +128,98 @@ class VoidedRowsGuardTest extends TestCase
         }
     }
 
-    public function test_nothing_under_app_deletes_history_rows(): void
+    public function test_nothing_under_app_gets_around_the_global_scope(): void
     {
         $found = [];
-        $delete = '/(?:table\(\s*[\'"]?\$?(?:'.self::TABLES.'|table)|\$this->rows\(|\$query\b).*->delete\(\)|DELETE\s+FROM\s+(?:'.self::TABLES.')\b|(?:Salary|Title|DeptEmp|DeptManager)::[^;]*->delete\(\)/i';
 
-        foreach (File::allFiles(app_path()) as $file) {
-            foreach ($this->statements($this->withoutComments($file->getContents())) as $statement) {
-                if (preg_match($delete, $statement)) {
-                    $found[] = $file->getRelativePathname().': '.trim($statement);
-                }
-            }
+        foreach ($this->sourceFiles() as $path => $source) {
+            array_push($found, ...array_map(fn ($v) => $path.': '.$v, $this->scopeBypasses($source)));
         }
 
         $this->assertSame([], $found);
     }
 
+    public function test_the_guard_notices_scope_bypasses(): void
+    {
+        foreach ([
+            "<?php Salary::withoutGlobalScope('active')->get();",
+            '<?php Salary::withoutGlobalScopes()->get();',
+            '<?php (new Title)->newQueryWithoutScopes()->get();',
+            '<?php (new Title)->newQueryWithoutScope(ExcludesVoidedRows::class);',
+            '<?php $employee->titles()->withoutGlobalScopes()->count();',
+            '<?php (new DeptEmp)->newModelQuery()->get();',
+        ] as $code) {
+            $this->assertNotSame([], $this->scopeBypasses($code), $code);
+        }
+    }
+
+    public function test_nothing_under_app_deletes_history_rows(): void
+    {
+        $found = [];
+
+        foreach ($this->sourceFiles() as $path => $source) {
+            array_push($found, ...array_map(fn ($v) => $path.': '.$v, $this->deletions($source)));
+        }
+
+        $this->assertSame([], $found);
+    }
+
+    public function test_the_guard_notices_deletions(): void
+    {
+        foreach ([
+            "<?php DB::table('salaries')->where('emp_no', 1)->delete();",
+            "<?php HistoryRows::active(DB::table('titles'))->delete();",
+            '<?php DB::table($table)->delete();',
+            "<?php \$this->rows('titles')->delete();",
+            '<?php Salary::where("emp_no", 1)->delete();',
+            '<?php Title::query()->forceDelete();',
+            "<?php DB::table('dept_emp')->truncate();",
+            '<?php Salary::truncate();',
+            "<?php DB::statement('DELETE FROM salaries WHERE emp_no = 1');",
+            "<?php DB::statement('TRUNCATE TABLE `dept_manager`');",
+            "<?php DB::table('activity_log')->truncate();",
+            '<?php ActivityLog::truncate();',
+        ] as $code) {
+            $this->assertNotSame([], $this->deletions($code), $code);
+        }
+
+        $this->assertSame([], $this->deletions("<?php DB::table('sessions')->delete(); \$user->delete();"));
+    }
+
     /**
-     * @return string[] statements that reference a history table without a filter
+     * @return array<string, string> path relative to app/ => source without comments
+     */
+    private function sourceFiles(): array
+    {
+        $sources = [];
+
+        foreach (File::allFiles(app_path()) as $file) {
+            $path = str_replace('\\', '/', $file->getRelativePathname());
+
+            if (! isset(self::ALLOWLIST[$path])) {
+                $sources[$path] = $file->getContents();
+            }
+        }
+
+        return $sources;
+    }
+
+    /**
+     * @return string[] references without their own filter
      */
     private function violations(string $source): array
     {
-        $reference = '/(?:table\(\s*[\'"](?:'.self::TABLES.')\b)'
-            .'|(?:table\(\s*\$(?:table|historyTable)\b)'
-            .'|(?:\b(?:from|join|leftJoin|rightJoin)\(\s*[\'"](?:'.self::TABLES.')\b)'
-            .'|(?:belongsToMany\([^)]*[\'"](?:'.self::TABLES.')[\'"])'
-            .'|(?:\b(?:FROM|JOIN)\s+(?:'.self::TABLES.')\b)/i';
-        $filter = '/HistoryRows::(?:active|sql|COLUMN)|void_log_id|departmentMembership\(/';
-
         $violations = [];
-        foreach ($this->statements($this->withoutComments($source)) as $statement) {
-            $references = preg_match_all($reference, $statement);
 
-            if ($references > 0 && ! str_contains($statement, '->insert(') && preg_match_all($filter, $statement) < $references) {
-                $violations[] = trim((string) preg_replace('/\s+/', ' ', $statement));
+        foreach (explode(';', $this->withoutComments($source)) as $statement) {
+            if (str_contains($statement, '->insert(')) {
+                continue;
+            }
+
+            foreach ($this->references($statement) as [$table, $name]) {
+                if (! $this->isFiltered($statement, $table, $name)) {
+                    $violations[] = $table.($name === null ? '' : ' as '.$name).' in: '.trim((string) preg_replace('/\s+/', ' ', $statement));
+                }
             }
         }
 
@@ -118,11 +227,124 @@ class VoidedRowsGuardTest extends TestCase
     }
 
     /**
+     * Every reference to a history table in a statement.
+     *
+     * @return array<int, array{string, string|null}> [table, alias]; table "$" = dynamic
+     */
+    private function references(string $statement): array
+    {
+        $tables = self::TABLES;
+        $references = [];
+
+        // Query builder: table(...), from(...), every *join*(...), fromRaw(...), with an optional alias.
+        $call = '\b(?:table|from|fromRaw|\w*[jJ]oin\w*)\(\s*';
+        preg_match_all("/{$call}['\"]`?({$tables})`?(?:\s+(?:as\s+)?(\w+))?['\"]/i", $statement, $matches, PREG_SET_ORDER);
+        foreach ($matches as $match) {
+            $references[] = [strtolower($match[1]), $match[2] ?? null ?: null];
+        }
+
+        // Dynamic names: a variable or constant where a table is expected.
+        preg_match_all('/(?:\btable|->(?:from|\w*[jJ]oin\w*))\(\s*(\$\w+|(?:self|static)::\w+)/', $statement, $matches);
+        foreach ($matches[1] as $name) {
+            if ($name !== '$join') {
+                $references[] = ['$', $name];
+            }
+        }
+
+        // Relations.
+        preg_match_all("/belongsToMany\([^)]*['\"]({$tables})['\"]/", $statement, $matches);
+        foreach ($matches[1] as $table) {
+            $references[] = [$table, 'pivot'];
+        }
+
+        // Raw SQL: FROM / JOIN table, also with backticks, a schema or in a comma list.
+        $name = "(?:`?\w+`?\.)?`?({$tables})`?";
+        $alias = '(?:\s+(?:as\s+)?(\w+))?';
+        preg_match_all("/\b(?:FROM|JOIN)\s+{$name}{$alias}/i", $statement, $matches, PREG_SET_ORDER);
+        $raw = $matches;
+        preg_match_all("/\bFROM\s+[^'\"]*?,\s*{$name}{$alias}/i", $statement, $matches, PREG_SET_ORDER);
+        foreach ([...$raw, ...$matches] as $match) {
+            $word = $match[2] ?? null;
+            $sentence = $word !== null && ! preg_match('/\bFROM\b.*?\b(SELECT|WHERE)\b|\bSELECT\b/is', $statement) && ! str_contains($match[0], '`');
+
+            if (! $sentence || $word === null) {
+                $references[] = [strtolower($match[1]), $word === null || in_array(strtolower($word), self::NOT_AN_ALIAS, true) ? null : $word];
+            }
+        }
+
+        // SQL built from a variable table name.
+        if (preg_match('/\b(?:FROM|JOIN)\s+[\'"]\s*\.\s*\$\w+/i', $statement, $match)) {
+            $references[] = ['$', $match[0]];
+        }
+
+        return $references;
+    }
+
+    private function isFiltered(string $statement, string $table, ?string $name): bool
+    {
+        if ($name === 'pivot') {
+            return (bool) preg_match('/wherePivot\(\s*(?:HistoryRows::COLUMN|[\'"]void_log_id[\'"])/', $statement);
+        }
+
+        if ($table === '$') {
+            return (bool) preg_match('/HistoryRows::active\(\s*DB::table\(\s*'.preg_quote((string) $name, '/').'\s*\)\s*\)/', $statement);
+        }
+
+        if ($name === 'de_f' && str_contains($statement, 'departmentMembership(')) {
+            return true;
+        }
+
+        $reference = preg_quote($name ?? $table, '/');
+        $filters = [
+            "HistoryRows::sql\(\s*['\"]{$reference}['\"]\s*\)",
+            "HistoryRows::active\(.*?,\s*['\"]{$reference}['\"]\s*\)",
+            "\b{$reference}`?\.`?void_log_id\b",
+        ];
+
+        if ($name === null) {
+            $filters[] = "HistoryRows::active\(\s*DB::table\(\s*['\"]{$table}['\"]\s*\)\s*\)";
+            $filters[] = "\bFROM\s+`?{$table}`?\s+WHERE\s+(?:.*\s)?void_log_id\b";
+        }
+
+        return (bool) preg_match('/'.implode('|', $filters).'/is', $statement);
+    }
+
+    /**
      * @return string[]
      */
-    private function statements(string $source): array
+    private function scopeBypasses(string $source): array
     {
-        return explode(';', $source);
+        preg_match_all('/\b(withoutGlobalScopes?|newQueryWithoutScopes?|newQueryWithoutRelationships|newModelQuery|getQuery)\(/', $this->withoutComments($source), $matches);
+
+        return $matches[0];
+    }
+
+    /**
+     * Deleting or truncating history rows, or truncating the audit log whose ids void_log_id holds.
+     *
+     * @return string[]
+     */
+    private function deletions(string $source): array
+    {
+        $tables = self::TABLES;
+        $patterns = [
+            "/(?:table\(\s*['\"]?(?:{$tables})\b|table\(\s*\\\$|\\\$this->rows\(|\b(?:Salary|Title|DeptEmp|DeptManager)::).*->(?:delete|forceDelete|truncate)\(/is",
+            '/\b(?:Salary|Title|DeptEmp|DeptManager|ActivityLog)::truncate\(/',
+            "/table\(\s*['\"]activity_log['\"]\s*\).*->truncate\(/is",
+            "/\bDELETE\s+FROM\s+(?:`?\w+`?\.)?`?(?:{$tables})\b/i",
+            "/\bTRUNCATE\s+(?:TABLE\s+)?(?:`?\w+`?\.)?`?(?:{$tables}|activity_log)\b/i",
+        ];
+
+        $found = [];
+        foreach (explode(';', $this->withoutComments($source)) as $statement) {
+            foreach ($patterns as $pattern) {
+                if (preg_match($pattern, $statement)) {
+                    $found[] = trim((string) preg_replace('/\s+/', ' ', $statement));
+                }
+            }
+        }
+
+        return $found;
     }
 
     private function withoutComments(string $source): string
