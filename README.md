@@ -7,7 +7,7 @@ A comprehensive web-based employee management platform built with Laravel 11, de
 ### Core Functionality
 - **Employee Directory**: Browse and search through employee records with pagination
 - **Individual Employee Profiles**: Detailed view with employment history, salary progression, and department changes
-- **Department Management**: View departmental structure and employee distribution
+- **Departments**: Department pages with headcount, gender split, tenure, salary figures, job titles, headcount per year and manager history; admins and HR create, rename and delete departments and assign department managers (see [Department Pages and Managers](#department-pages-and-managers))
 - **Dashboard Analytics**: Real-time statistics and insights with caching for optimal performance
 - **Accounts & Roles**: Sign-in, four roles (admin, HR, manager, viewer), department-scoped managers, salary data only for authorized roles, admin user management
 
@@ -266,6 +266,25 @@ The system uses the following core entities:
 - Recently hired employees
 - Cached data for optimal performance
 
+### Department Pages and Managers
+- **Index** (`/departments`): every department with its code, current headcount, current manager,
+  number of distinct current job titles and (with `view-salaries`) the average current salary.
+  Managers only see their own department; other department pages answer 403.
+- **Department page** (`/departments/{dept_no}`): headcount, women/men, average years with the
+  company, average/min/max salary (`view-salaries` only), job titles, headcount at the end of each
+  year (chart), recent joiners and leavers, current manager and the full manager history, and a
+  link to the directory filtered to the department (`/employees?department=d005`).
+- **Managing** (`manage-departments`: admin, HR): create (code `d` + three digits, unique name),
+  rename, delete (only a department that never had employees, managers or manager accounts).
+  *Assign manager*: a current employee of the department (searchable) and an effective date - the
+  current manager's period ends on that date, the new one starts on it; the date must be after
+  the current manager's start, not before the employee joined the department and not in the
+  future. *End management* closes the current period without a successor. `dept_manager` keeps one
+  period per employee and department, so a former manager cannot manage the same department
+  again. Every change is in the audit log (`department.*`) and clears the cached figures.
+- **Employee profile**: the manager of the employee's current department and a badge with the
+  employee's own management periods.
+
 ### Export System
 - Individual employee PDF reports
 - Bulk data export capabilities
@@ -333,6 +352,9 @@ The application provides the following main routes:
 - `GET /employees/{emp_no}` - Individual employee profile (managers: own department only)
 - `POST /employees/export` - Bulk export functionality (`export-data`)
 - `GET /employees/{emp_no}/export-pdf` - Individual PDF export
+- `GET /departments`, `GET /departments/{dept_no}` - Departments index and page (managers: own department only)
+- `GET /departments/create`, `POST /departments`, `GET /departments/{dept_no}/edit`, `PUT|DELETE /departments/{dept_no}` - Create, rename, delete (`manage-departments`)
+- `GET /departments/{dept_no}/manager-candidates?q=`, `POST /departments/{dept_no}/managers`, `POST /departments/{dept_no}/managers/end` - Department managers (`manage-departments`)
 - `GET /account`, `PUT /account/profile`, `PUT /account/password` - My account
 - `/users` (resource without `show`), `PUT /users/{user}/password` - User management (`manage-users`)
 

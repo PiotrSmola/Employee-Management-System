@@ -38,6 +38,7 @@ order. Add a file instead of editing `navbar.blade.php`. Existing slots:
 |------|------|
 | `main/10-dashboard` | Dashboard |
 | `main/20-employees` | All Employees, Export Data |
+| `main/30-departments` | Departments |
 | `main/90-users` | Users (admins) |
 | `user/10-account` | My account |
 | `user/90-users` | Users (admins) |
@@ -150,10 +151,29 @@ EmployeeDataCache::flush();                     // everything
 EmployeeDataCache::flush(['d001', 'd005']);     // company-wide keys + only these departments (e.g. a transfer)
 ```
 
-Keys: `dashboard_stats`, `employees_by_department`, `dashboard_stats:dept:<no>`,
-`employees_by_title:dept:<no>`, `job_titles:dept:<no>` (`-` = manager without a department).
+Keys: `dashboard_stats`, `employees_by_department`, `departments_overview`, `dashboard_stats:dept:<no>`,
+`employees_by_title:dept:<no>`, `job_titles:dept:<no>`, `department_details:dept:<no>`
+(`-` = manager without a department).
 New cached figures derived from employee data get a key method there and are added to
 `EmployeeDataCache::keys()`, so `flush()` keeps clearing everything.
+
+## Departments and department managers
+
+- Changes go through `App\Services\DepartmentManagementService` (`create`, `rename`, `delete`,
+  `assignManager($department, $empNo, 'Y-m-d')`, `endManagement($department, 'Y-m-d')`): they
+  validate, log `department.created|renamed|deleted|manager_assigned|manager_ended` and flush the
+  cache. Callers check `manage-departments`.
+- `dept_manager` has one row per employee and department (primary key `emp_no, dept_no`); the
+  current manager has `to_date = 9999-01-01`. A change of manager on day D ends the old period
+  on D and starts the new one on D.
+- Code that moves a current department manager out of the department or terminates them
+  should end the management too: `endManagement($department, $date)` (the date must be after
+  the period's start).
+- Read-only figures: `App\Services\DepartmentStatistics` (`overview()`, `details()`,
+  `currentManagers()`, `managerHistory()`, `forEmployee()`); salary figures are only returned
+  when the caller passes `canSeeSalaries()`.
+- The directory accepts an initial department: `route('employees.index', ['department' => 'd005'])`
+  (the manager scope still wins).
 
 ## Tests
 

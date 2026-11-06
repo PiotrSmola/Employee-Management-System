@@ -12,6 +12,7 @@ contract for code that adds routes, screens, reports or APIs.
 | Gate registration, policies | `App\Providers\AuthorizationServiceProvider` |
 | Which employees / columns a user may see | `App\Support\EmployeeVisibility` |
 | Single employee | `App\Policies\EmployeePolicy` (`view` uses the visibility) |
+| Departments | `App\Policies\DepartmentPolicy` (`view`: a manager only their own department; changes need `manage-departments`) |
 | Signed-in + active check | `auth`, `auth.session`, `active` middleware (`routes/web.php`, which loads `routes/web/*.php` inside the group; Livewire updates in `AppServiceProvider`) |
 
 Inactive accounts (`users.is_active = false`) cannot sign in, are signed out on their next
