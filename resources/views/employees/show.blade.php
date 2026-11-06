@@ -84,7 +84,7 @@
         </div>
 
         @can('manage-employees')
-            <x-employee-actions :employee="$employee" />
+            <x-employee-actions :employee="$employee" :can-see-salaries="$canSeeSalaries" />
         @endcan
 
         <div class="row g-3 mb-4 justify-content-center">

@@ -108,12 +108,12 @@ class TitleAndSalaryTest extends HrOperationsTestCase
         $employee = $this->currentEmployee(salary: 60000);
         $url = route('employees.salary', $employee->emp_no);
 
-        $this->post($url, ['mode' => 'percent', 'percent' => '3.5', 'salary' => 'ignored', 'effective_date' => '2024-01-01'])
+        $this->post($url, ['mode' => 'percent', 'percent' => '3.5', 'shown_salary' => '60000', 'salary' => 'ignored', 'effective_date' => '2024-01-01'])
             ->assertSessionHasNoErrors();
         $this->assertSame(62100, $this->current('salaries', $employee->emp_no)->salary);
         $this->assertEquals(3.5, $this->onlyEntry('employee.salary_changed')->changes['requested_percent']);
 
-        $this->post($url, ['mode' => 'percent', 'percent' => '-10', 'effective_date' => '2024-06-01'])->assertSessionHasNoErrors();
+        $this->post($url, ['mode' => 'percent', 'percent' => '-10', 'shown_salary' => '62100', 'effective_date' => '2024-06-01'])->assertSessionHasNoErrors();
         $this->assertSame(55890, $this->current('salaries', $employee->emp_no)->salary);
     }
 

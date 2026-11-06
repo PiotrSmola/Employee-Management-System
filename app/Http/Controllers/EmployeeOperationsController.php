@@ -15,6 +15,7 @@ use App\Http\Requests\Employees\UpdatePersonalDataRequest;
 use App\Models\Department;
 use App\Models\Employee;
 use App\Services\EmployeeOperationsService;
+use App\Support\Ability;
 use App\Support\AuditLogPresenter;
 use App\Support\EmploymentRules;
 use Closure;
@@ -33,9 +34,13 @@ use Throwable;
  */
 class EmployeeOperationsController extends Controller
 {
-    public function __construct(private readonly EmployeeOperationsService $operations)
-    {
-    }
+    /**
+     * How long a hire form's token stays "being submitted". Short, so a request that
+     * died half way (no chance to release the token) does not block the form for a day.
+     */
+    public const HIRE_PENDING_SECONDS = 120;
+
+    public function __construct(private readonly EmployeeOperationsService $operations) {}
 
     public function create(): View
     {
@@ -56,7 +61,7 @@ class EmployeeOperationsController extends Controller
 
         // The form's one-time token: a second submit (double click, reload) does not hire twice.
         $tokenKey = 'hire-form:'.$request->validated('form_token');
-        if (! Cache::add($tokenKey, 'pending', now()->addDay())) {
+        if (! Cache::add($tokenKey, 'pending', now()->addSeconds(self::HIRE_PENDING_SECONDS))) {
             $hired = Cache::get($tokenKey);
 
             return is_numeric($hired)
@@ -136,6 +141,7 @@ class EmployeeOperationsController extends Controller
 
     public function changeSalary(ChangeSalaryRequest $request, int $emp_no): RedirectResponse
     {
+        $this->authorize(Ability::VIEW_SALARIES);
         $employee = $this->employee($emp_no);
         $data = $request->validated();
 
@@ -145,6 +151,7 @@ class EmployeeOperationsController extends Controller
             $data['mode'] === 'percent' ? (float) $data['percent'] : null,
             $data['effective_date'],
             $request->boolean('confirm_unusual'),
+            isset($data['shown_salary']) ? (int) $data['shown_salary'] : null,
         ));
 
         return $this->backToProfile($employee, __('The salary of :name changes from :before to :after on :date.', [
@@ -185,12 +192,15 @@ class EmployeeOperationsController extends Controller
 
     public function correctSalary(CorrectSalaryRequest $request, int $emp_no): RedirectResponse
     {
+        $this->authorize(Ability::VIEW_SALARIES);
         $employee = $this->employee($emp_no);
 
         $this->run('correctSalary', $this->profileUrl($employee), fn () => $this->operations->correctLatestSalary(
             $employee,
             (int) $request->validated('salary'),
             $request->validated('reason'),
+            $request->validated('row_from_date'),
+            (int) $request->validated('row_salary'),
             $request->boolean('confirm_unusual'),
         ));
 
@@ -205,6 +215,8 @@ class EmployeeOperationsController extends Controller
             $employee,
             $request->validated('title'),
             $request->validated('reason'),
+            $request->validated('row_from_date'),
+            $request->validated('row_title'),
         ));
 
         return $this->backToProfile($employee, __('The latest job title of :name has been corrected.', ['name' => $this->name($employee)]));

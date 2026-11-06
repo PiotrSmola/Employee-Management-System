@@ -7,7 +7,9 @@ use App\Models\ActivityLog;
 use App\Models\Department;
 use App\Models\Employee;
 use App\Services\AuditLogger;
+use App\Support\Ability;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
@@ -73,10 +75,39 @@ class HrAuthorizationTest extends HrOperationsTestCase
         $employee = $this->currentEmployee();
         $this->signInAs(Role::Hr);
 
-        $this->post(route('employees.salary', $employee->emp_no), ['mode' => 'percent', 'percent' => '5', 'effective_date' => '2024-01-01'])
+        $this->post(route('employees.salary', $employee->emp_no), ['mode' => 'percent', 'percent' => '5', 'shown_salary' => '60000', 'effective_date' => '2024-01-01'])
             ->assertSessionHasNoErrors();
 
         $this->assertSame($this->user->id, $this->onlyEntry('employee.salary_changed')->user_id);
+    }
+
+    public function test_managing_employees_does_not_imply_seeing_salaries(): void
+    {
+        $employee = $this->currentEmployee(salary: 61357);
+        $this->post(route('employees.salary', $employee->emp_no), ['mode' => 'amount', 'salary' => '62468', 'effective_date' => '2024-01-01'])->assertSessionHasNoErrors();
+        $this->signInAs(Role::Hr);
+
+        $render = fn (bool $canSee) => $this->blade(
+            '<x-employee-actions :employee="$employee" :can-see-salaries="$canSee" />',
+            ['employee' => $employee->fresh(), 'canSee' => $canSee],
+        );
+
+        $render(true)->assertSee('id="salaryModal"', false)->assertSee('62,468')->assertSee('id="correctSalaryModal"', false);
+
+        $render(false)
+            ->assertDontSee('id="salaryModal"', false)
+            ->assertDontSee('id="correctSalaryModal"', false)
+            ->assertDontSee('62,468')
+            ->assertDontSee('62468')
+            ->assertDontSee('61,357')
+            ->assertDontSee('data-current-salary', false)
+            ->assertSee('id="undoModal"', false);
+
+        Gate::before(fn ($user, string $ability) => $ability === Ability::VIEW_SALARIES ? false : null);
+
+        $this->post(route('employees.salary', $employee->emp_no), ['mode' => 'amount', 'salary' => '70000', 'effective_date' => '2024-02-01'])->assertForbidden();
+        $this->put(route('employees.salary.correct', $employee->emp_no), ['salary' => '70000', 'reason' => 'x', ...$this->salaryRow($employee)])->assertForbidden();
+        $this->assertSame(62468, $this->current('salaries', $employee->emp_no)->salary);
     }
 
     public function test_the_profile_shows_actions_and_change_history_only_to_hr_staff(): void

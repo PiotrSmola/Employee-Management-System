@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\HrOperations;
 
+use App\Http\Controllers\EmployeeOperationsController;
 use App\Models\ActivityLog;
 use App\Models\Department;
 use App\Models\DeptEmp;
@@ -208,7 +209,7 @@ class EdgeCasesTest extends HrOperationsTestCase
         $this->get($this->profile($employee))->assertOk();
         $this->post(route('employees.title', $employee->emp_no), ['title' => 'Engineer', 'kind' => 'change', 'effective_date' => '2024-01-01'])
             ->assertSessionHasNoErrors();
-        $this->post(route('employees.salary', $employee->emp_no), ['mode' => 'percent', 'percent' => '5', 'effective_date' => '2024-01-01'])
+        $this->post(route('employees.salary', $employee->emp_no), ['mode' => 'percent', 'percent' => '5', 'shown_salary' => '', 'effective_date' => '2024-01-01'])
             ->assertSessionHasErrorsIn('salary', ['percent']);
         $this->post(route('employees.salary', $employee->emp_no), ['mode' => 'amount', 'salary' => '1000000', 'effective_date' => '2024-01-01'])
             ->assertSessionHasNoErrors();
@@ -280,6 +281,46 @@ class EdgeCasesTest extends HrOperationsTestCase
         ))->first();
 
         $this->assertStringContainsString('employees_birth_date_last_name_first_name_index', (string) $plan->possible_keys);
+    }
+
+    public function test_a_hire_token_left_pending_by_a_dead_request_expires_soon(): void
+    {
+        $department = Department::factory()->create();
+        $payload = $this->hirePayload($department);
+        // What a request leaves behind when it dies between claiming the token and finishing.
+        Cache::put('hire-form:'.$payload['form_token'], 'pending', now()->addSeconds(EmployeeOperationsController::HIRE_PENDING_SECONDS));
+
+        $this->post(route('employees.store'), $payload)
+            ->assertRedirect(route('employees.create'))
+            ->assertSessionHas('error');
+        $this->assertSame(0, Employee::count());
+
+        $this->travel(EmployeeOperationsController::HIRE_PENDING_SECONDS + 1)->seconds();
+
+        $this->post(route('employees.store'), $payload)->assertSessionHasNoErrors();
+        $this->assertSame(1, Employee::count());
+    }
+
+    public function test_a_finished_hire_keeps_its_token_for_a_day(): void
+    {
+        $department = Department::factory()->create();
+        $payload = $this->hirePayload($department);
+        $this->post(route('employees.store'), $payload)->assertSessionHasNoErrors();
+
+        $this->travel(EmployeeOperationsController::HIRE_PENDING_SECONDS + 1)->seconds();
+
+        $this->post(route('employees.store'), $payload)->assertSessionHas('status');
+        $this->assertSame(1, Employee::count());
+    }
+
+    public function test_the_changes_column_is_only_reachable_as_an_attribute_inside_activity_log(): void
+    {
+        $entry = AuditLogger::log('employee.updated', 'employee', 1, ['before' => ['a' => 1]]);
+        $fresh = ActivityLog::find($entry->id);
+
+        $this->assertSame(['before' => ['a' => 1]], $fresh->changes, 'From outside the class: the column.');
+        $this->assertSame([], (fn () => $this->changes)->call($fresh), "Inside the class: Eloquent's property.");
+        $this->assertSame(['before' => ['a' => 1]], (fn () => $this->getAttribute('changes'))->call($fresh));
     }
 
     public function test_names_and_audit_payloads_are_escaped(): void

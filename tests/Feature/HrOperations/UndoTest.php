@@ -6,7 +6,9 @@ use App\Enums\Role;
 use App\Models\ActivityLog;
 use App\Models\Department;
 use App\Models\Employee;
+use App\Services\AuditLogger;
 use App\Services\EmployeeOperationsService;
+use App\Support\AuditLogPresenter;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -51,7 +53,7 @@ class UndoTest extends HrOperationsTestCase
                 $t->post(route('employees.title', $e->emp_no), ['title' => 'Senior Engineer', 'kind' => 'promotion', 'effective_date' => '2024-01-01']);
             }, 'employee.promoted'],
             'salary change' => [function (self $t, Employee $e) {
-                $t->post(route('employees.salary', $e->emp_no), ['mode' => 'percent', 'percent' => '5', 'effective_date' => '2024-01-01']);
+                $t->post(route('employees.salary', $e->emp_no), ['mode' => 'percent', 'percent' => '5', 'shown_salary' => '60000', 'effective_date' => '2024-01-01']);
             }, 'employee.salary_changed'],
             'termination' => [function (self $t, Employee $e) {
                 $t->post(route('employees.terminate', $e->emp_no), ['end_date' => '2024-09-30', 'reason' => 'Mistake']);
@@ -63,10 +65,10 @@ class UndoTest extends HrOperationsTestCase
                 ]);
             }, 'employee.updated'],
             'salary correction' => [function (self $t, Employee $e) {
-                $t->put(route('employees.salary.correct', $e->emp_no), ['salary' => '61000', 'reason' => 'Typo']);
+                $t->put(route('employees.salary.correct', $e->emp_no), ['salary' => '61000', 'reason' => 'Typo', ...$t->salaryRow($e)]);
             }, 'employee.salary_corrected'],
             'title correction' => [function (self $t, Employee $e) {
-                $t->put(route('employees.title.correct', $e->emp_no), ['title' => 'Engineer II', 'reason' => 'Typo']);
+                $t->put(route('employees.title.correct', $e->emp_no), ['title' => 'Engineer II', 'reason' => 'Typo', ...$t->titleRow($e)]);
             }, 'employee.title_corrected'],
         ];
     }
@@ -161,7 +163,7 @@ class UndoTest extends HrOperationsTestCase
         // Voided rows are hidden from the profile's own history.
         $this->get($this->profile($employee))->assertViewHas('salaryHistory', fn ($rows) => ! $rows->contains('salary', 61000));
 
-        $presenter = new \App\Support\AuditLogPresenter([], withSalaries: false);
+        $presenter = new AuditLogPresenter([], withSalaries: false);
         $text = collect($presenter->rows(ActivityLog::find($undo)->changes))->pluck('after')->implode(' ');
         $this->assertStringContainsString('Salary, 01.01.2024 - present', $text);
         $this->assertStringNotContainsString('61,000', $text);
@@ -274,9 +276,70 @@ class UndoTest extends HrOperationsTestCase
     public function test_entries_without_undo_data_cannot_be_undone(): void
     {
         $employee = $this->currentEmployee();
-        \App\Services\AuditLogger::log('employee.salary_changed', 'employee', $employee->emp_no, ['before' => ['salary' => 1], 'after' => ['salary' => 2]]);
+        AuditLogger::log('employee.salary_changed', 'employee', $employee->emp_no, ['before' => ['salary' => 1], 'after' => ['salary' => 2]]);
 
         $this->undo($employee)->assertSessionHasErrorsIn('undo', ['undo' => 'The last change cannot be undone.']);
+    }
+
+    public function test_undoing_a_return_transfer_with_ended_management_restores_everything(): void
+    {
+        $sales = Department::factory()->create();
+        $research = Department::factory()->create();
+        $employee = $this->currentEmployee($research, previousDepartment: $sales);
+        $this->makeManager($employee, $research->dept_no, '2001-01-01');
+        $before = $this->records($employee->emp_no);
+
+        $this->post(route('employees.transfer', $employee->emp_no), ['dept_no' => $sales->dept_no, 'effective_date' => '2024-05-01'])->assertSessionHasNoErrors();
+        $this->assertTrue(ActivityLog::where('action', 'employee.transferred')->sole()->changes['returning']);
+        $this->assertNull($this->current('dept_manager', $employee->emp_no));
+
+        $this->undo($employee)->assertSessionHasNoErrors();
+
+        $this->assertSame($before, $this->records($employee->emp_no));
+        $this->assertSame($research->dept_no, $this->current('dept_manager', $employee->emp_no)->dept_no);
+        $this->assertSame(1, DB::table('dept_emp')->where('emp_no', $employee->emp_no)->where('dept_no', $sales->dept_no)->where('void_log_id', '<>', 0)->count());
+        $this->assertSame(1, DB::table('dept_emp')->where('emp_no', $employee->emp_no)->where('dept_no', $sales->dept_no)->where('void_log_id', 0)->count());
+
+        $changes = ActivityLog::where('action', 'employee.change_undone')->sole()->changes;
+        $this->assertSame(['dept_emp', 'dept_manager'], collect($changes['reopened_rows'])->pluck('table')->all());
+    }
+
+    /**
+     * @return array<string, array{\Closure(array, int): array}>
+     */
+    public static function forgedUndoProvider(): array
+    {
+        return [
+            'another table' => [fn (array $ops, int $empNo) => [['set', 'users', ['id' => 1], ['role' => 'admin'], ['role' => 'viewer']]]],
+            'another employee' => [fn (array $ops, int $empNo) => [['insert', 'salaries', ['emp_no' => $empNo + 1, 'from_date' => '2024-01-01']]]],
+            'wrong key columns' => [fn (array $ops, int $empNo) => [['insert', 'salaries', ['emp_no' => $empNo]]]],
+            'extra key column' => [fn (array $ops, int $empNo) => [['close', 'salaries', ['emp_no' => $empNo, 'from_date' => '2024-01-01', 'salary' => 1], '2024-01-01']]],
+            'unknown operation' => [fn (array $ops, int $empNo) => [['delete', 'salaries', ['emp_no' => $empNo, 'from_date' => '2024-01-01']]]],
+            'column outside the list' => [fn (array $ops, int $empNo) => [['set', 'salaries', ['emp_no' => $empNo, 'from_date' => '2024-01-01'], ['void_log_id' => 5], ['void_log_id' => 0]]]],
+            'employee row inserted' => [fn (array $ops, int $empNo) => [['insert', 'employees', ['emp_no' => $empNo]]]],
+            'not a list' => [fn (array $ops, int $empNo) => ['x']],
+            'empty' => [fn (array $ops, int $empNo) => []],
+        ];
+    }
+
+    #[DataProvider('forgedUndoProvider')]
+    public function test_forged_undo_data_is_refused(\Closure $forge): void
+    {
+        $employee = $this->currentEmployee();
+        $this->post(route('employees.salary', $employee->emp_no), ['mode' => 'amount', 'salary' => '61000', 'effective_date' => '2024-01-01'])->assertSessionHasNoErrors();
+
+        // The fingerprint stays right: only the row changes are forged.
+        $entry = ActivityLog::where('action', 'employee.salary_changed')->sole();
+        $changes = $entry->changes;
+        $changes['_undo']['ops'] = $forge($changes['_undo']['ops'], $employee->emp_no);
+        DB::table('activity_log')->where('id', $entry->id)->update(['changes' => json_encode($changes)]);
+        $records = $this->records($employee->emp_no);
+
+        $this->get($this->profile($employee))->assertDontSee('Undo last change');
+        $this->undo($employee)->assertSessionHasErrorsIn('undo', ['undo' => 'The last change cannot be undone.']);
+
+        $this->assertSame($records, $this->records($employee->emp_no));
+        $this->assertSame(0, ActivityLog::where('action', 'employee.change_undone')->count());
     }
 
     public function test_managers_and_viewers_cannot_undo(): void

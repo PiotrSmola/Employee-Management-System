@@ -13,7 +13,9 @@ use Illuminate\View\View;
 
 /**
  * "HR actions" card + modals of the employee profile:
- * <x-employee-actions :employee="$employee" /> inside @can('manage-employees').
+ * <x-employee-actions :employee="$employee" :can-see-salaries="$canSeeSalaries" />
+ * inside @can('manage-employees'). Managing employees does not imply seeing salaries:
+ * without $canSeeSalaries no figure reaches the view and the salary forms are left out.
  *
  * Public methods are callable in the view ($old(...), $invalid(...), ...).
  */
@@ -35,9 +37,17 @@ class EmployeeActions extends Component
     /** @var array<string, mixed> */
     public array $context;
 
-    public function __construct(public Employee $employee, EmployeeOperationsService $operations)
-    {
+    public function __construct(
+        public Employee $employee,
+        public bool $canSeeSalaries,
+        EmployeeOperationsService $operations,
+    ) {
         $this->context = $operations->formContext($employee);
+
+        if (! $canSeeSalaries) {
+            $this->context['currentSalary'] = null;
+            $this->context['latestSalary'] = null;
+        }
     }
 
     public function render(): View
@@ -52,7 +62,7 @@ class EmployeeActions extends Component
             'openModal' => collect(self::MODALS)->first(fn (string $modal, string $bag) => $this->errorBag($bag)->any()),
             'hireMax' => $hireLimit !== null && $hireLimit < $today ? $hireLimit : $today,
             'undoHours' => EmployeeOperationsService::UNDO_HOURS,
-            'undoPresenter' => new AuditLogPresenter($this->context['departmentNames']->all()),
+            'undoPresenter' => new AuditLogPresenter($this->context['departmentNames']->all(), $this->canSeeSalaries),
             'currentDepartmentNames' => $this->departmentNames($this->context['currentDepartments']),
             'managedDepartmentNames' => $this->departmentNames($this->context['managedDepartments']),
             'allManagedDepartmentNames' => $this->departmentNames($this->context['allManagedDepartments']),

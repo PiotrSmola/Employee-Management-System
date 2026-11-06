@@ -129,6 +129,30 @@ abstract class HrOperationsTestCase extends TestCase
         return $changes;
     }
 
+    /**
+     * The hidden fields of the salary correction form: the latest row it shows.
+     *
+     * @return array<string, mixed>
+     */
+    public function salaryRow(Employee $employee): array
+    {
+        $row = DB::table('salaries')->where('emp_no', $employee->emp_no)->where('void_log_id', 0)->orderByDesc('from_date')->first();
+
+        return ['row_from_date' => $row->from_date, 'row_salary' => $row->salary];
+    }
+
+    /**
+     * The hidden fields of the title correction form: the latest row it shows.
+     *
+     * @return array<string, mixed>
+     */
+    public function titleRow(Employee $employee): array
+    {
+        $row = DB::table('titles')->where('emp_no', $employee->emp_no)->where('void_log_id', 0)->orderByDesc('from_date')->first();
+
+        return ['row_from_date' => $row->from_date, 'row_title' => $row->title];
+    }
+
     protected function profile(Employee $employee): string
     {
         return route('employees.show', $employee->emp_no);

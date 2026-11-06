@@ -22,6 +22,8 @@ class ChangeSalaryRequest extends EmployeeOperationRequest
             'salary' => ['exclude_unless:mode,amount', ...$this->salaryRules()],
             'percent' => ['exclude_unless:mode,percent', 'required', 'numeric',
                 'between:'.EmploymentRules::MIN_PERCENT.','.EmploymentRules::MAX_PERCENT, 'not_in:0'],
+            // The salary the percentage was entered for (the form shows it).
+            'shown_salary' => ['exclude_unless:mode,percent', 'nullable', 'integer'],
             'effective_date' => $this->dateRules(),
             'confirm_unusual' => ['boolean'],
         ];

@@ -71,6 +71,13 @@ class EmployeeOperationsService
         'employee.rehired', 'employee.salary_corrected', 'employee.title_corrected',
     ];
 
+    /** Columns an undo may restore, per table. */
+    private const RESTORABLE_COLUMNS = [
+        'employees' => self::PERSONAL_FIELDS,
+        'salaries' => ['salary'],
+        'titles' => ['title'],
+    ];
+
     /** Primary key columns of the history tables. */
     private const KEYS = [
         'dept_emp' => ['emp_no', 'dept_no', 'from_date'],
@@ -82,9 +89,7 @@ class EmployeeOperationsService
     /** Row changes of the running operation (written to the audit entry as `_undo`). */
     private array $ops = [];
 
-    public function __construct(private readonly EmployeeNumberAllocator $numbers)
-    {
-    }
+    public function __construct(private readonly EmployeeNumberAllocator $numbers) {}
 
     /**
      * Hire a new employee: employees + dept_emp + titles + salaries rows starting on the hire date.
@@ -331,19 +336,20 @@ class EmployeeOperationsService
      *
      * A change outside -50 % to +100 % of the current salary needs $confirmUnusual
      * (field `confirm_unusual`). A current employee without a current salary row
-     * gets one (amount only).
+     * gets one (amount only). $shownSalary is the salary a percentage was entered for:
+     * if it is no longer the current one the change is refused (field `stale`).
      *
      * @return array{before: ?int, after: int}
      *
      * @throws ValidationException
      */
-    public function changeSalary(Employee $employee, ?int $amount, ?float $percent, string $date, bool $confirmUnusual = false): array
+    public function changeSalary(Employee $employee, ?int $amount, ?float $percent, string $date, bool $confirmUnusual = false, ?int $shownSalary = null): array
     {
         if (($amount === null) === ($percent === null)) {
             throw ValidationException::withMessages(['salary' => __('Enter either a new amount or a percentage.')]);
         }
 
-        [$result, $departments] = DB::transaction(function () use ($employee, $amount, $percent, $date, $confirmUnusual) {
+        [$result, $departments] = DB::transaction(function () use ($employee, $amount, $percent, $date, $confirmUnusual, $shownSalary) {
             $employee = $this->lock($employee);
             $empNo = $employee->emp_no;
             $departments = $this->requireCurrentEmployment($employee, 'salary');
@@ -355,6 +361,10 @@ class EmployeeOperationsService
             }
 
             $before = $current === null ? null : (int) $current->salary;
+            if ($percent !== null && $shownSalary !== $before) {
+                $this->staleForm();
+            }
+
             $field = $amount === null ? 'percent' : 'salary';
             $after = $this->assertSalary($field, $amount ?? EmploymentRules::applyPercent($before, $percent));
             if ($after === $before) {
@@ -498,15 +508,17 @@ class EmployeeOperationsService
     /**
      * Fix a typo in the amount of the most recent salary row (dates unchanged).
      * Only for current employees; a $reason is required and logged, a change
-     * outside -50 % to +100 % needs $confirmUnusual.
+     * outside -50 % to +100 % needs $confirmUnusual. $rowFromDate and $rowSalary
+     * identify the row the form showed; if another one is the latest now (or it was
+     * changed), the correction is refused (field `stale`).
      *
      * @throws ValidationException
      */
-    public function correctLatestSalary(Employee $employee, int $salary, string $reason, bool $confirmUnusual = false): void
+    public function correctLatestSalary(Employee $employee, int $salary, string $reason, string $rowFromDate, int $rowSalary, bool $confirmUnusual = false): void
     {
         $salary = $this->assertSalary('salary', $salary);
 
-        $departments = DB::transaction(function () use ($employee, $salary, $reason, $confirmUnusual) {
+        $departments = DB::transaction(function () use ($employee, $salary, $reason, $rowFromDate, $rowSalary, $confirmUnusual) {
             $employee = $this->lock($employee);
             $empNo = $employee->emp_no;
             $departments = $this->requireCurrentEmployment($employee, 'salary', __('Corrections are only possible for current employees.'));
@@ -514,6 +526,9 @@ class EmployeeOperationsService
             $latest = $this->rows('salaries')->where('emp_no', $empNo)->orderByDesc('from_date')->lockForUpdate()->first();
             if ($latest === null) {
                 throw ValidationException::withMessages(['salary' => __(':name has no salary history.', ['name' => $this->name($employee)])]);
+            }
+            if ($latest->from_date !== $rowFromDate || (int) $latest->salary !== $rowSalary) {
+                $this->staleForm();
             }
             if ((int) $latest->salary === $salary) {
                 throw ValidationException::withMessages(['salary' => __('The amount is unchanged.')]);
@@ -542,15 +557,17 @@ class EmployeeOperationsService
 
     /**
      * Fix the wording of the most recent job title row (dates unchanged). Only for
-     * current employees; a $reason is required and logged.
+     * current employees; a $reason is required and logged. $rowFromDate and $rowTitle
+     * identify the row the form showed; if another one is the latest now (or it was
+     * changed), the correction is refused (field `stale`).
      *
      * @throws ValidationException
      */
-    public function correctLatestTitle(Employee $employee, string $title, string $reason): void
+    public function correctLatestTitle(Employee $employee, string $title, string $reason, string $rowFromDate, string $rowTitle): void
     {
         $title = trim($title);
 
-        $departments = DB::transaction(function () use ($employee, $title, $reason) {
+        $departments = DB::transaction(function () use ($employee, $title, $reason, $rowFromDate, $rowTitle) {
             $employee = $this->lock($employee);
             $empNo = $employee->emp_no;
             $departments = $this->requireCurrentEmployment($employee, 'title', __('Corrections are only possible for current employees.'));
@@ -558,6 +575,9 @@ class EmployeeOperationsService
             $latest = $this->latestTitle($empNo, lock: true);
             if ($latest === null) {
                 throw ValidationException::withMessages(['title' => __(':name has no job title history.', ['name' => $this->name($employee)])]);
+            }
+            if ($latest->from_date !== $rowFromDate || $latest->title !== $rowTitle) {
+                $this->staleForm();
             }
             if ($latest->title === $title) {
                 throw ValidationException::withMessages(['title' => __('The job title is unchanged.')]);
@@ -876,11 +896,62 @@ class EmployeeOperationsService
     {
         return match (true) {
             $entry->action === 'employee.hired' => __('A hire cannot be undone. Correct the personal data, or terminate the employment.'),
-            ! in_array($entry->action, self::UNDOABLE_ACTIONS, true) || ! isset($entry->changes['_undo']['ops'], $entry->changes['_undo']['state']) => __('The last change cannot be undone.'),
+            ! in_array($entry->action, self::UNDOABLE_ACTIONS, true) || ! $this->validUndoData($entry->changes['_undo'] ?? null, $empNo) => __('The last change cannot be undone.'),
             $entry->created_at->lt(now()->subHours(self::UNDO_HOURS)) => __('Changes can only be undone within :hours hours.', ['hours' => self::UNDO_HOURS]),
             ! hash_equals($entry->changes['_undo']['state'], $this->stateHash($empNo)) => __('The records of this employee were changed after the last change, so it cannot be undone any more.'),
             default => null,
         };
+    }
+
+    /**
+     * Does the stored undo data have the exact shape operations write? Only rows of
+     * this employee, known tables and columns: nothing else is ever acted on.
+     */
+    private function validUndoData(mixed $undo, int $empNo): bool
+    {
+        if (! is_array($undo) || ! is_string($undo['state'] ?? null) || ! is_array($undo['ops'] ?? null) || $undo['ops'] === []) {
+            return false;
+        }
+
+        foreach ($undo['ops'] as $change) {
+            if (! $this->validUndoChange($change, $empNo)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function validUndoChange(mixed $change, int $empNo): bool
+    {
+        if (! is_array($change) || ! array_is_list($change) || count($change) < 3) {
+            return false;
+        }
+
+        [$op, $table, $key] = $change;
+        $keyColumns = $table === 'employees' ? ['emp_no'] : (is_string($table) ? (self::KEYS[$table] ?? null) : null);
+
+        if ($keyColumns === null || ! is_array($key) || ($key['emp_no'] ?? null) !== $empNo || ! $this->sameColumns($key, $keyColumns)) {
+            return false;
+        }
+
+        return match ($op) {
+            'close' => $table !== 'employees' && count($change) === 4 && is_string($change[3]),
+            'insert' => $table !== 'employees' && count($change) === 3,
+            'set' => count($change) === 5 && is_array($change[3]) && is_array($change[4])
+                && $change[3] !== [] && $this->sameColumns($change[3], array_keys($change[4]))
+                && array_diff(array_keys($change[3]), self::RESTORABLE_COLUMNS[$table] ?? []) === [],
+            default => false,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $values
+     * @param  string[]  $columns
+     */
+    private function sameColumns(array $values, array $columns): bool
+    {
+        return array_diff(array_keys($values), $columns) === [] && array_diff($columns, array_keys($values)) === [];
     }
 
     /**
@@ -937,6 +1008,16 @@ class EmployeeOperationsService
         if ($affected !== 1) {
             $this->undoMismatch();
         }
+    }
+
+    /**
+     * The form was built from data that changed before it was submitted.
+     *
+     * @throws ValidationException
+     */
+    private function staleForm(): never
+    {
+        throw ValidationException::withMessages(['stale' => __('The data changed in the meantime. Reload the page and try again.')]);
     }
 
     /**

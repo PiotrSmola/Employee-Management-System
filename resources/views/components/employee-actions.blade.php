@@ -27,9 +27,11 @@
                     <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#titleModal">
                         <i class="bi bi-award me-1"></i>{{ __('Change title') }}
                     </button>
-                    <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#salaryModal">
-                        <i class="bi bi-cash-coin me-1"></i>{{ __('Change salary') }}
-                    </button>
+                    @if ($canSeeSalaries)
+                        <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#salaryModal">
+                            <i class="bi bi-cash-coin me-1"></i>{{ __('Change salary') }}
+                        </button>
+                    @endif
                     <button type="button" class="btn btn-outline-danger" data-bs-toggle="modal" data-bs-target="#terminateModal">
                         <i class="bi bi-box-arrow-right me-1"></i>{{ __('Terminate employment') }}
                     </button>
@@ -228,11 +230,13 @@
     </div>
 
     {{-- Change salary --}}
+    @if ($canSeeSalaries)
     <div class="modal fade" id="salaryModal" tabindex="-1" aria-labelledby="salaryModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
             <form method="POST" action="{{ route('employees.salary', $employee->emp_no) }}" class="modal-content" novalidate
                 data-current-salary="{{ $currentSalary ?? '' }}" data-preview-label="{{ __('New salary') }}" id="hrSalaryForm">
                 @csrf
+                <input type="hidden" name="shown_salary" value="{{ $currentSalary }}">
                 <div class="modal-header">
                     <h5 class="modal-title" id="salaryModalLabel"><i class="bi bi-cash-coin me-2"></i>{{ __('Change salary') }}</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{{ __('Close') }}"></button>
@@ -279,6 +283,8 @@
             </form>
         </div>
     </div>
+
+    @endif
 
     {{-- Terminate --}}
     <div class="modal fade" id="terminateModal" tabindex="-1" aria-labelledby="terminateModalLabel" aria-hidden="true">
@@ -376,6 +382,8 @@
             <form method="POST" action="{{ route('employees.salary.correct', $employee->emp_no) }}" class="modal-content" novalidate>
                 @csrf
                 @method('PUT')
+                <input type="hidden" name="row_from_date" value="{{ $latestSalary->from_date }}">
+                <input type="hidden" name="row_salary" value="{{ $latestSalary->salary }}">
                 <div class="modal-header">
                     <h5 class="modal-title" id="correctSalaryModalLabel"><i class="bi bi-cash me-2"></i>{{ __('Correct latest salary') }}</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{{ __('Close') }}"></button>
@@ -419,6 +427,8 @@
             <form method="POST" action="{{ route('employees.title.correct', $employee->emp_no) }}" class="modal-content" novalidate>
                 @csrf
                 @method('PUT')
+                <input type="hidden" name="row_from_date" value="{{ $latestTitle->from_date }}">
+                <input type="hidden" name="row_title" value="{{ $latestTitle->title }}">
                 <div class="modal-header">
                     <h5 class="modal-title" id="correctTitleModalLabel"><i class="bi bi-type me-2"></i>{{ __('Correct latest job title') }}</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{{ __('Close') }}"></button>
