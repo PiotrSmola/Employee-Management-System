@@ -9,8 +9,8 @@ use App\Reports\ReportCache;
 use App\Reports\ReportCatalog;
 use App\Reports\ReportContext;
 use App\Support\EmployeeVisibility;
-use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
+use Throwable;
 
 /**
  * Precomputes the cached report figures for the current state (or --as-of) of
@@ -18,6 +18,7 @@ use Illuminate\Console\Command;
  * scope, so the report pages are served from the cache. Figures that are
  * already cached are kept unless --fresh is given. Scheduled hourly
  * (routes/console.php): after EmployeeDataCache::flush() the next run rebuilds them.
+ * A scope that fails does not stop the others; the command then ends with an error.
  */
 class WarmReports extends Command
 {
@@ -31,26 +32,23 @@ class WarmReports extends Command
     public function handle(): int
     {
         $asOf = null;
-        if ($this->option('as-of')) {
-            try {
-                $asOf = CarbonImmutable::createFromFormat('!Y-m-d', (string) $this->option('as-of')) ?: null;
-            } catch (\Throwable) {
-                $asOf = null;
-            }
+        if ($this->option('as-of') !== null) {
+            $asOf = ReportContext::parseDate((string) $this->option('as-of'));
 
             if ($asOf === null) {
-                $this->error('--as-of must be a date in the format Y-m-d.');
+                $this->error('--as-of must be a real date in the format Y-m-d, from '.ReportContext::EARLIEST_YEAR.' on.');
 
                 return self::FAILURE;
             }
         }
 
-        if ($this->option('fresh')) {
-            app()->instance(ReportCache::class, (new ReportCache)->refreshing());
+        $departments = $this->departments();
+        if ($departments === null) {
+            return self::FAILURE;
         }
 
+        app()->instance(ReportCache::class, (new ReportCache)->refreshing((bool) $this->option('fresh'))->unguarded());
         $catalog = app(ReportCatalog::class);
-        $departments = $this->option('department') ?: Department::query()->orderBy('dept_no')->pluck('dept_no')->all();
 
         $contexts = ['all' => ReportContext::make(EmployeeVisibility::unrestricted(), null, $asOf)];
         foreach ($departments as $deptNo) {
@@ -61,14 +59,60 @@ class WarmReports extends Command
         }
 
         $total = microtime(true);
+        $failed = [];
         foreach ($contexts as $label => $context) {
             $started = microtime(true);
-            $catalog->warm($context);
-            $this->line(sprintf('  %-14s %6.2f s', $label, microtime(true) - $started));
+
+            try {
+                $catalog->warm($context);
+                $this->line(sprintf('  %-14s %6.2f s', $label, microtime(true) - $started));
+            } catch (Throwable $e) {
+                report($e);
+                $failed[] = $label;
+                $this->error(sprintf('  %-14s failed: %s', $label, $e->getMessage()));
+            }
         }
 
-        $this->info(sprintf('Warmed %d report scopes (%s) in %.1f s.', count($contexts), $contexts['all']->asOfKey(), microtime(true) - $total));
+        $warmed = count($contexts) - count($failed);
+        $summary = sprintf('Warmed %d of %d report scopes (%s) in %.1f s.', $warmed, count($contexts), $contexts['all']->asOfKey(), microtime(true) - $total);
+
+        if ($failed !== []) {
+            $this->error($summary.' Failed: '.implode(', ', $failed).'.');
+
+            return self::FAILURE;
+        }
+
+        $this->info($summary);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * The requested departments as stored in the database (default: all), null after an error.
+     *
+     * @return list<string>|null
+     */
+    private function departments(): ?array
+    {
+        $requested = $this->option('department');
+
+        if ($requested === []) {
+            return Department::query()->orderBy('dept_no')->pluck('dept_no')->all();
+        }
+
+        $known = [];
+        foreach ($requested as $deptNo) {
+            $department = Department::find($deptNo);
+
+            if ($department === null) {
+                $this->error("Unknown department: {$deptNo}.");
+
+                return null;
+            }
+
+            $known[] = $department->dept_no;
+        }
+
+        return array_values(array_unique($known));
     }
 }

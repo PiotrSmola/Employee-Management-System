@@ -9,4 +9,4 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote')->hourly();
 
 // Rebuild the cached report figures after a flush / expiry (no-op while they are cached).
-Schedule::command('reports:warm')->hourly()->withoutOverlapping();
+Schedule::command('reports:warm')->hourly()->withoutOverlapping(30);

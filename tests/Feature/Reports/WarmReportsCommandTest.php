@@ -6,12 +6,16 @@ use App\Models\Salary;
 use App\Models\User;
 use App\Reports\CompensationReports;
 use App\Reports\ReportCache;
+use App\Reports\ReportCatalog;
 use App\Reports\ReportContext;
 use App\Support\EmployeeVisibility;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Mockery\MockInterface;
+use PHPUnit\Framework\Attributes\DataProvider;
+use RuntimeException;
 use Tests\Concerns\BuildsReportData;
 use Tests\TestCase;
 
@@ -28,7 +32,7 @@ class WarmReportsCommandTest extends TestCase
 
     public function test_warm_caches_every_figure_of_every_scope(): void
     {
-        $this->artisan('reports:warm')->assertSuccessful()->expectsOutputToContain('Warmed 5 report scopes');
+        $this->artisan('reports:warm')->assertSuccessful()->expectsOutputToContain('Warmed 5 of 5 report scopes');
 
         $manager = EmployeeVisibility::for(User::factory()->manager('d002')->make());
         $contexts = [
@@ -52,7 +56,51 @@ class WarmReportsCommandTest extends TestCase
         $this->assertTrue(Cache::has(ReportCache::key('snapshot', $context)));
         $this->assertFalse(Cache::has(ReportCache::key('snapshot', ReportContext::make(EmployeeVisibility::unrestricted(), 'd001', CarbonImmutable::parse('1995-12-31')))));
 
-        $this->artisan('reports:warm', ['--as-of' => 'yesterday'])->assertFailed();
+    }
+
+    #[DataProvider('invalidOptions')]
+    public function test_invalid_options_stop_the_command(array $options): void
+    {
+        $this->artisan('reports:warm', $options)->assertFailed();
+
+        $context = ReportContext::make(EmployeeVisibility::unrestricted());
+        $this->assertFalse(Cache::has(ReportCache::key('movements', $context)));
+    }
+
+    /**
+     * @return array<string, array{array<string, mixed>}>
+     */
+    public static function invalidOptions(): array
+    {
+        return [
+            'not a date' => [['--as-of' => 'yesterday']],
+            'impossible date' => [['--as-of' => '2020-02-31']],
+            'before 1900' => [['--as-of' => '1899-12-31']],
+            'unknown department' => [['--department' => ['d999']]],
+        ];
+    }
+
+    public function test_department_option_uses_the_database_value(): void
+    {
+        $this->artisan('reports:warm', ['--department' => ['D002']])->assertSuccessful();
+
+        $this->assertTrue(Cache::has(ReportCache::key('snapshot', ReportContext::make(EmployeeVisibility::unrestricted(), 'd002'))));
+    }
+
+    public function test_a_failing_scope_does_not_stop_the_others(): void
+    {
+        $this->partialMock(ReportCatalog::class, function (MockInterface $mock) {
+            $mock->shouldReceive('warm')->times(5)->andReturnUsing(function (ReportContext $context) {
+                if ($context->scopeKey() === 'dept-d001') {
+                    throw new RuntimeException('Disk full');
+                }
+            });
+        });
+
+        $this->artisan('reports:warm')
+            ->expectsOutputToContain('dept d001      failed: Disk full')
+            ->expectsOutputToContain('Warmed 4 of 5 report scopes')
+            ->assertFailed();
     }
 
     public function test_fresh_recomputes_cached_figures(): void
@@ -76,5 +124,7 @@ class WarmReportsCommandTest extends TestCase
 
         $this->assertCount(1, $events);
         $this->assertSame('0 * * * *', $events->first()->expression);
+        $this->assertTrue($events->first()->withoutOverlapping);
+        $this->assertSame(30, $events->first()->expiresAt);
     }
 }
