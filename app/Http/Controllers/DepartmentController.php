@@ -25,8 +25,7 @@ class DepartmentController extends Controller
         private readonly DepartmentStatistics $statistics,
         private readonly DepartmentManagementService $departments,
         private readonly DepartmentPresenter $presenter,
-    ) {
-    }
+    ) {}
 
     public function index(Request $request): View
     {

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Employee;
 use App\Support\HistoryRows;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -33,7 +34,7 @@ class EmployeeProfileService
      *     canSeeSalaries: bool
      * }
      *
-     * @throws \Illuminate\Database\Eloquent\ModelNotFoundException
+     * @throws ModelNotFoundException
      */
     public function build(Employee|int|string $employee, bool $withSalaries = true): array
     {

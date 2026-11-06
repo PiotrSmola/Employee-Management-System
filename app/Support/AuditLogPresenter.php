@@ -71,8 +71,7 @@ final class AuditLogPresenter
         private readonly array $departmentNames = [],
         private readonly bool $withSalaries = true,
         private readonly array $employeeNames = [],
-    ) {
-    }
+    ) {}
 
     /**
      * The name of the record an entry is about, if it is known here.

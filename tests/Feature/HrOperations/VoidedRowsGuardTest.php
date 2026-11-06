@@ -98,7 +98,7 @@ class VoidedRowsGuardTest extends TestCase
             'helper with the table name' => ["<?php HistoryRows::active(DB::table('dept_emp'), 'dept_emp')->join('departments', 'a', '=', 'b')->get();"],
             'dynamic table with helper' => ['<?php HistoryRows::active(DB::table($table))->get();'],
             'dynamic table with alias' => ['<?php HistoryRows::active(DB::table($source), $alias)->get();'],
-            'dynamic join' => ["<?php \$q->join(\$source, function (\$join) use (\$alias) { HistoryRows::active(\$join, \$alias); });"],
+            'dynamic join' => ['<?php $q->join($source, function ($join) use ($alias) { HistoryRows::active($join, $alias); });'],
             'sub-query' => ["<?php HistoryRows::active(\$this->subSelect(\$q)->from('titles as t'), 't')->get();"],
             'join' => ["<?php \$q->leftJoin('titles as t', function (\$join) { HistoryRows::active(\$join->on('a', '=', 'b'), 't')->where('x', 1); });"],
             'two joins' => ["<?php \$q->join('titles as t', fn (\$j) => HistoryRows::active(\$j, 't'))->join('salaries as s', fn (\$j) => HistoryRows::active(\$j, 's'))->get();"],

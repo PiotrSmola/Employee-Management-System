@@ -20,9 +20,7 @@ class UserController extends Controller
 {
     public const PER_PAGE = 15;
 
-    public function __construct(private readonly UserManagementService $users)
-    {
-    }
+    public function __construct(private readonly UserManagementService $users) {}
 
     public function index(Request $request): View
     {

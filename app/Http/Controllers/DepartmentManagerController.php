@@ -16,9 +16,7 @@ use Illuminate\Http\Request;
  */
 class DepartmentManagerController extends Controller
 {
-    public function __construct(private readonly DepartmentManagementService $departments)
-    {
-    }
+    public function __construct(private readonly DepartmentManagementService $departments) {}
 
     /**
      * Current employees of the department for the searchable "new manager" select.
