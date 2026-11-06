@@ -39,6 +39,7 @@ order. Add a file instead of editing `navbar.blade.php`. Existing slots:
 | `main/10-dashboard` | Dashboard |
 | `main/20-employees` | All Employees, Export Data |
 | `main/30-departments` | Departments |
+| `main/40-reports` | Reports (`view-reports`) |
 | `main/90-users` | Users (admins) |
 | `user/10-account` | My account |
 | `user/60-audit-log` | Audit log (admins, HR) |
@@ -257,6 +258,18 @@ FigureCache::refresh($key, $ttl, $compute);
 - The directory accepts an initial department: `route('employees.index', ['department' => 'd005'])`
   (the manager scope still wins).
 
+Reports (`App\Reports`) are cached per figure, department scope and as-of date under a
+versioned namespace instead of single keys: `reports:<version>:<figure>:<scope>:<as-of>`
+(`EmployeeDataCache::report()`, built by `App\Reports\ReportCache::key()`; scope `all`,
+`dept-<no>` or `mgr-<no>`, as-of `current-<today>` or `Y-m-d`). `flush()` forgets
+`reports:version` (it is part of `keys()`), which retires every cached report at once;
+`EmployeeDataCache::flushReports()` does only that. Writers therefore need nothing extra.
+`php artisan reports:warm` (scheduled hourly in `routes/console.php`) recomputes the current
+state of the company, of every department and of every manager scope after a flush; options
+`--as-of=Y-m-d`, `--department=d005` (repeatable), `--fresh` (recompute cached figures too).
+Report code reads `dept_emp`, `titles` and `salaries` only through `App\Reports\ReportSources`,
+so a condition for all history rows belongs in `ReportSources::rowFilter()`.
+
 ## Tests
 
 - Use factories, never the real dataset. `RefreshDatabase` runs against `ems_<ws>_test`.
@@ -267,5 +280,7 @@ FigureCache::refresh($key, $ttl, $compute);
   `->former($department, 'Staff', endDate: '1999-06-30')`, `previousDepartment:` /
   `previousTitle:` for a history; `Department::factory()`.
 - `Tests\Concerns\BuildsDirectory`: a small fixed directory for query/list/export tests.
+- `Tests\Concerns\BuildsReportData`: five employees with an exactly known history
+  (transfer, leaver, salary changes) for report figures.
 - New abilities go into `tests/Feature/Auth/AuthorizationTest.php`; test every new
   route for an allowed and a forbidden role.
