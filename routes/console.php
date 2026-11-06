@@ -13,3 +13,6 @@ Schedule::command('departments:warm')->hourly()->withoutOverlapping();
 
 // Rebuild the cached report figures after a flush / expiry (no-op while they are cached).
 Schedule::command('reports:warm')->hourly()->withoutOverlapping(30);
+
+// Generated exports are kept for data_tools.exports.retention_days days ("My exports").
+Schedule::command('exports:prune')->dailyAt('03:00')->withoutOverlapping();

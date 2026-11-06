@@ -2,6 +2,7 @@
 
 namespace App\Queries;
 
+use App\Support\EmployeeVisibility;
 use App\Support\HistoryRows;
 use Closure;
 use Illuminate\Database\Query\Builder;
@@ -60,9 +61,7 @@ class EmployeeSearchQuery
     /** Up to this many matches, one query ordered by a per-employee sort key is cheapest. */
     private const SMALL_RESULT = 20000;
 
-    public function __construct(private readonly EmployeeFilters $filters)
-    {
-    }
+    public function __construct(private readonly EmployeeFilters $filters) {}
 
     /**
      * @param  EmployeeFilters|array<string, mixed>  $filters
@@ -347,7 +346,10 @@ class EmployeeSearchQuery
             $query->whereIntegerNotInRaw('e.emp_no', $this->exceptIds);
         }
 
-        if ($f->hasSearch()) {
+        if ($f->searchesEmployeeNumber()) {
+            // A number is an employee number: exact primary-key match (no name scan).
+            $query->where('e.emp_no', $f->employeeNumber());
+        } elseif ($f->hasSearch()) {
             $term = '%'.$f->search.'%';
             $query->where(function ($q) use ($term) {
                 $q->where('e.first_name', 'like', $term)
@@ -508,7 +510,7 @@ class EmployeeSearchQuery
      * Selecting `de_f.emp_no` gives each member exactly once.
      *
      * This is the definition of "employee of a department" used by the
-     * department filter and by the manager scope ({@see \App\Support\EmployeeVisibility}).
+     * department filter and by the manager scope ({@see EmployeeVisibility}).
      */
     public static function departmentMembership(Builder $deptEmp, string $deptNo, string $status = 'all', bool $perRowLastCheck = false): Builder
     {

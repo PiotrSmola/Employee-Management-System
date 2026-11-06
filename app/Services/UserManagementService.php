@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\Role;
 use App\Models\ActivityLog;
+use App\Models\Export;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -101,10 +102,34 @@ class UserManagementService
                     'before' => ['role' => $changes['before']['role']],
                     'after' => ['role' => $changes['after']['role']],
                 ]);
+                $this->revokeApiTokens($user, 'role_changed');
+            }
+            if (! $active) {
+                $this->revokeApiTokens($user, 'deactivated');
             }
 
             return $user;
         });
+    }
+
+    /**
+     * Revoke all API tokens of $user: after anything that should end programmatic access
+     * (password, role, deactivation, deletion). Audited when there was anything to revoke.
+     *
+     * @return int the number of revoked tokens
+     */
+    public function revokeApiTokens(User $user, string $reason, ?User $actor = null): int
+    {
+        $count = $user->tokens()->delete();
+
+        if ($count > 0) {
+            AuditLogger::log('data.api_token_revoked', ActivityLog::SUBJECT_USER, $user->id, [
+                'count' => $count,
+                'reason' => $reason,
+            ], $actor);
+        }
+
+        return $count;
     }
 
     /**
@@ -119,6 +144,8 @@ class UserManagementService
         ])->save();
 
         AuditLogger::log('user.password_reset', ActivityLog::SUBJECT_USER, $user->id);
+
+        $this->revokeApiTokens($user, 'password_reset');
     }
 
     /**
@@ -132,16 +159,24 @@ class UserManagementService
             throw ValidationException::withMessages(['user' => $reason]);
         }
 
+        // The entries of the user's exports go with the account (foreign key), the files do not.
+        $exportFiles = Export::ownedBy($user)->whereNotNull('file_path')->pluck('file_path');
+
         DB::transaction(function () use ($user) {
             if ($user->isActiveAdmin() && $this->isLastActiveAdmin($user)) {
                 throw ValidationException::withMessages(['user' => __('At least one active administrator is required.')]);
             }
 
             $before = AuditLogger::values($user->only(self::AUDITED_FIELDS));
+            $this->revokeApiTokens($user, 'user_deleted');
             $user->delete();
 
             AuditLogger::log('user.deleted', ActivityLog::SUBJECT_USER, $user->id, ['before' => $before]);
         });
+
+        if ($exportFiles->isNotEmpty()) {
+            Export::disk()->delete($exportFiles->all());
+        }
     }
 
     /**

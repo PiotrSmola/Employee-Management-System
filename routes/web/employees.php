@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/employees', [EmployeeController::class, 'index'])->name('employees.index');
 Route::post('/employees/export', [ExportController::class, 'export'])
-    ->middleware('can:'.Ability::EXPORT_DATA)
+    ->middleware(['can:'.Ability::EXPORT_DATA, 'throttle:10,1'])
     ->name('employees.export');
 Route::get('/employees/{emp_no}', [EmployeeController::class, 'show'])
     ->whereNumber('emp_no')

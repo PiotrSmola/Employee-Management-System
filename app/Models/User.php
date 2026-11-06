@@ -8,6 +8,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Carbon;
+use Laravel\Sanctum\HasApiTokens;
 
 /**
  * An application account (not an employee of the dataset).
@@ -18,11 +20,12 @@ use Illuminate\Notifications\Notifiable;
  * @property Role $role
  * @property string|null $dept_no department a manager is limited to
  * @property bool $is_active
- * @property \Illuminate\Support\Carbon|null $last_login_at
+ * @property Carbon|null $last_login_at
  */
 class User extends Authenticatable
 {
-    use HasFactory, Notifiable;
+    // HasApiTokens: personal access tokens of the REST API (they act with the user's role).
+    use HasApiTokens, HasFactory, Notifiable;
 
     protected $fillable = [
         'name',

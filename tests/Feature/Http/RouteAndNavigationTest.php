@@ -2,11 +2,15 @@
 
 namespace Tests\Feature\Http;
 
+use App\Http\Middleware\EnsureTokenUserIsActive;
+use App\Http\Middleware\ThrottleApi;
 use App\Models\User;
+use App\Support\Ability;
 use App\Support\Navigation;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Support\Facades\Route;
+use Laravel\Sanctum\Http\Middleware\CheckAbilities;
 use Tests\TestCase;
 
 /**
@@ -24,7 +28,8 @@ class RouteAndNavigationTest extends TestCase
     {
         $routes = collect(Route::getRoutes()->getRoutes())
             ->filter(fn (RoutingRoute $route) => str_starts_with($route->getActionName(), 'App\\'))
-            ->reject(fn (RoutingRoute $route) => in_array($route->getName(), self::PUBLIC_ROUTES, true));
+            ->reject(fn (RoutingRoute $route) => in_array($route->getName(), self::PUBLIC_ROUTES, true))
+            ->reject(fn (RoutingRoute $route) => str_starts_with($route->uri(), 'api/'));
 
         $this->assertNotEmpty($routes);
 
@@ -34,6 +39,25 @@ class RouteAndNavigationTest extends TestCase
             foreach (['auth', 'auth.session', 'active'] as $required) {
                 $this->assertContains($required, $middleware, "Route {$route->uri()} must be in the authenticated group.");
             }
+        }
+    }
+
+    public function test_every_api_route_requires_an_active_token_user_and_is_rate_limited(): void
+    {
+        $routes = collect(Route::getRoutes()->getRoutes())
+            ->filter(fn (RoutingRoute $route) => str_starts_with($route->uri(), 'api/'));
+
+        $this->assertNotEmpty($routes);
+
+        foreach ($routes as $route) {
+            $middleware = $route->gatherMiddleware();
+
+            $this->assertContains('auth:sanctum', $middleware, "API route {$route->uri()} needs a token.");
+            $this->assertContains(EnsureTokenUserIsActive::class, $middleware, "API route {$route->uri()} needs the active check.");
+            $this->assertContains(ThrottleApi::class, $middleware, "API route {$route->uri()} must be rate limited.");
+            $this->assertContains('can:'.Ability::EXPORT_DATA, $middleware, "API route {$route->uri()} needs export-data.");
+            $this->assertContains(CheckAbilities::class.':read', $middleware, "API route {$route->uri()} needs the read ability.");
+            $this->assertStringStartsWith('api/v1/', $route->uri());
         }
     }
 

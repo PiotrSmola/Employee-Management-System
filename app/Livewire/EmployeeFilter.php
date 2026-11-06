@@ -4,6 +4,7 @@ namespace App\Livewire;
 
 use App\Livewire\Concerns\ReadsInitialDepartment;
 use App\Models\Department;
+use App\Queries\EmployeeFilters;
 use App\Support\EmployeeDataCache;
 use App\Support\EmployeeVisibility;
 use App\Support\HistoryRows;
@@ -34,7 +35,18 @@ class EmployeeFilter extends Component
 
     public $showFilters = false;
 
-    protected $listeners = ['resetFilters' => 'resetAllFilters'];
+    protected $listeners = ['resetFilters' => 'resetAllFilters', 'filtersRestored' => 'restoreFilters'];
+
+    /** URL query parameters of the directory (owned by EmployeeList) => filter input. */
+    private const URL_PARAMETERS = [
+        'search' => 'search',
+        'status' => 'employmentStatus',
+        'gender' => 'gender',
+        'department' => 'department',
+        'title' => 'jobTitle',
+        'salary_min' => 'salaryMin',
+        'salary_max' => 'salaryMax',
+    ];
 
     public function mount($search = '', $employmentStatus = 'all', $gender = 'all', $department = 'all', $salaryMin = '', $salaryMax = '', $jobTitle = 'all')
     {
@@ -46,6 +58,17 @@ class EmployeeFilter extends Component
         $this->salaryMin = $salaryMin;
         $this->salaryMax = $salaryMax;
         $this->jobTitle = $jobTitle;
+
+        // A shared link / reloaded page: start with the filters of the URL (the list reads
+        // the same parameters) and show the filter panel when more than the search is set.
+        $fromUrl = array_intersect_key(request()->query(), self::URL_PARAMETERS);
+        if ($fromUrl !== []) {
+            $this->fill($this->normalized(array_combine(
+                array_map(fn ($key) => self::URL_PARAMETERS[$key], array_keys($fromUrl)),
+                $fromUrl
+            ) + $this->getFilters()));
+            $this->showFilters = array_diff_key($fromUrl, ['search' => true]) !== [];
+        }
 
         // A manager's list is always limited to their department (enforced by
         // EmployeeList); show that department as the selected, locked filter.
@@ -106,6 +129,45 @@ class EmployeeFilter extends Component
         }
 
         $this->dispatch('filtersUpdated', $this->getFilters());
+    }
+
+    /**
+     * The list restored filters from the URL (Back / Forward): show them in the inputs
+     * without sending them back.
+     */
+    public function restoreFilters($filters)
+    {
+        if (! is_array($filters)) {
+            return;
+        }
+
+        $this->fill($this->normalized($filters + $this->getFilters()));
+
+        $visibility = EmployeeVisibility::current();
+        if ($visibility->isDepartmentScoped()) {
+            $this->department = $visibility->department() ?? EmployeeVisibility::NO_DEPARTMENT;
+        }
+    }
+
+    /**
+     * Filter input values normalized like the list does (EmployeeFilters).
+     *
+     * @param  array<string, mixed>  $values
+     * @return array<string, string>
+     */
+    private function normalized(array $values): array
+    {
+        $filters = EmployeeFilters::fromArray($values);
+
+        return [
+            'search' => $filters->search,
+            'employmentStatus' => $filters->employmentStatus,
+            'gender' => $filters->gender,
+            'department' => $filters->department,
+            'jobTitle' => $filters->jobTitle,
+            'salaryMin' => $filters->salaryMin === null ? '' : (string) $filters->salaryMin,
+            'salaryMax' => $filters->salaryMax === null ? '' : (string) $filters->salaryMax,
+        ];
     }
 
     private function getFilters()

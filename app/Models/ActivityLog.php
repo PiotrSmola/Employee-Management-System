@@ -34,6 +34,12 @@ class ActivityLog extends Model
     /** Entry of an undone HR operation; `changes.undone_entry_id` points at the original entry. */
     public const ACTION_CHANGE_UNDONE = 'employee.change_undone';
 
+    /** Bulk export (subject id: exports.id of a queued export, null for a direct download). */
+    public const SUBJECT_EXPORT = 'export';
+
+    /** Employee import (subject id: null; the created emp_no range is in `changes`). */
+    public const SUBJECT_IMPORT = 'import';
+
     public const UPDATED_AT = null;
 
     protected $table = 'activity_log';

@@ -4,11 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Models\ActivityLog;
 use App\Services\AuditLogger;
+use App\Services\UserManagementService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\Rules\Password;
-use Illuminate\View\View;
 
 /**
  * "My account": every user can change their own name and password.
@@ -16,9 +17,14 @@ use Illuminate\View\View;
  */
 class AccountController extends Controller
 {
-    public function edit(Request $request): View
+    public function edit(Request $request): Response
     {
-        return view('account.edit', ['user' => $request->user()]);
+        $response = response()->view('account.edit', ['user' => $request->user()]);
+
+        // A new API token is shown once: the page must not stay in a browser or proxy cache.
+        return $request->session()->has('api_token_plain')
+            ? $response->header('Cache-Control', 'no-store, private')
+            : $response;
     }
 
     public function updateProfile(Request $request): RedirectResponse
@@ -39,7 +45,7 @@ class AccountController extends Controller
         return redirect()->route('account.edit')->with('status', __('Your name has been updated.'));
     }
 
-    public function updatePassword(Request $request): RedirectResponse
+    public function updatePassword(Request $request, UserManagementService $users): RedirectResponse
     {
         $validated = $request->validateWithBag('password', [
             'current_password' => ['required', 'current_password'],
@@ -56,6 +62,7 @@ class AccountController extends Controller
         $request->session()->regenerate();
 
         AuditLogger::log('user.password_changed', ActivityLog::SUBJECT_USER, $user->id, [], $user);
+        $users->revokeApiTokens($user, 'password_changed', $user);
 
         return redirect()->route('account.edit')->with('status', __('Your password has been changed.'));
     }

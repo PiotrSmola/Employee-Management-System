@@ -26,7 +26,7 @@ RUN composer dump-autoload --optimize --no-dev --no-scripts
 FROM php:8.3-apache
 
 COPY --from=mlocati/php-extension-installer:2 /usr/bin/install-php-extensions /usr/local/bin/
-RUN install-php-extensions pdo_mysql gd intl zip bcmath opcache
+RUN install-php-extensions pdo_mysql gd intl zip bcmath opcache pcntl
 
 ENV APACHE_DOCUMENT_ROOT=/var/www/html/public
 RUN sed -ri 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-available/*.conf \

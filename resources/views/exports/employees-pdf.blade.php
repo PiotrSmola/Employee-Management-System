@@ -150,89 +150,99 @@
         @endif
     </div>
 
-    <table>
-        <thead>
-            <tr>
-                <th style="width: 8%;">Emp #</th>
-                <th style="width: 20%;">Full Name</th>
-                <th style="width: 15%;">Department</th>
-                <th style="width: 15%;">Job Title</th>
-                @if ($withSalaries ?? true)
-                    <th style="width: 10%;">Current Salary</th>
-                    <th style="width: 12%;">Total Earnings</th>
-                @endif
-                <th style="width: 10%;">Hire Date</th>
-                <th style="width: 6%;">Gender</th>
-                <th style="width: 4%;">Status</th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach ($employees as $index => $employee)
-                @if ($index > 0 && $index % 40 == 0)
-        </tbody>
-    </table>
-    <div class="page-break"></div>
-    <table>
-        <thead>
-            <tr>
-                <th style="width: 8%;">Emp #</th>
-                <th style="width: 20%;">Full Name</th>
-                <th style="width: 15%;">Department</th>
-                <th style="width: 15%;">Job Title</th>
-                @if ($withSalaries ?? true)
-                    <th style="width: 10%;">Current Salary</th>
-                    <th style="width: 12%;">Total Earnings</th>
-                @endif
-                <th style="width: 10%;">Hire Date</th>
-                <th style="width: 6%;">Gender</th>
-                <th style="width: 4%;">Status</th>
-            </tr>
-        </thead>
-        <tbody>
-            @endif
-            <tr>
-                <td class="emp-no">{{ $employee->emp_no }}</td>
-                <td><strong>{{ $employee->first_name }} {{ $employee->last_name }}</strong></td>
-                <td>
-                    @if ($employee->current_dept_name)
-                        <span class="department">{{ $employee->current_dept_name }}</span>
-                    @elseif ($employee->last_dept_name)
-                        <span class="former-employee">Former - {{ $employee->last_dept_name }}</span>
-                    @else
-                        <span class="former-employee">N/A</span>
-                    @endif
-                </td>
-                <td>
-                    @if ($employee->current_title)
-                        {{ $employee->current_title }}
-                    @elseif ($employee->last_job_title)
-                        <span class="last-info">{{ $employee->last_job_title }} (Last)</span>
-                    @else
-                        <em>N/A</em>
-                    @endif
-                </td>
-                @if ($withSalaries ?? true)
-                    <td>
-                        @if ($employee->current_salary)
-                            <span class="salary">${{ number_format($employee->current_salary) }}</span>
-                        @else
-                            <em>N/A</em>
-                        @endif
-                    </td>
-                    <td><strong>${{ number_format($employee->total_earnings) }}</strong></td>
-                @endif
-                <td>{{ \Carbon\Carbon::parse($employee->hire_date)->format('M d, Y') }}</td>
-                <td>
-                    <span class="{{ $employee->gender === 'M' ? 'gender-male' : 'gender-female' }}">
-                        {{ $employee->gender === 'M' ? 'M' : 'F' }} </span>
-                </td>
-                <td>
-                    {{ $employee->current_dept_name ? 'Active' : 'Former' }}
-                </td>
-            </tr>
-            @endforeach
-        </tbody>
-    </table>
+
+    @foreach ($employees->chunk(40) as $page)
+        @if (! $loop->first)
+            <div class="page-break"></div>
+        @endif
+        <table>
+            <thead>
+                <tr>
+                    @foreach ($columns as $column)
+                        <th>{{ $labels[$column] }}</th>
+                    @endforeach
+                </tr>
+            </thead>
+            <tbody>
+                @foreach ($page as $employee)
+                    <tr>
+                        @foreach ($columns as $column)
+                            @switch($column)
+                                @case('emp_no')
+                                    <td class="emp-no">{{ $employee->emp_no }}</td>
+                                @break
+
+                                @case('first_name')
+                                    <td>{{ $employee->first_name }}</td>
+                                @break
+
+                                @case('last_name')
+                                    <td>{{ $employee->last_name }}</td>
+                                @break
+
+                                @case('full_name')
+                                    <td><strong>{{ $employee->first_name }} {{ $employee->last_name }}</strong></td>
+                                @break
+
+                                @case('department')
+                                    <td>
+                                        @if ($employee->current_dept_name)
+                                            <span class="department">{{ $employee->current_dept_name }}</span>
+                                        @elseif ($employee->last_dept_name)
+                                            <span class="former-employee">Former - {{ $employee->last_dept_name }}</span>
+                                        @else
+                                            <span class="former-employee">N/A</span>
+                                        @endif
+                                    </td>
+                                @break
+
+                                @case('title')
+                                    <td>
+                                        @if ($employee->current_title)
+                                            {{ $employee->current_title }}
+                                        @elseif ($employee->last_job_title)
+                                            <span class="last-info">{{ $employee->last_job_title }} (Last)</span>
+                                        @else
+                                            <em>N/A</em>
+                                        @endif
+                                    </td>
+                                @break
+
+                                @case('salary')
+                                    <td>
+                                        @if ($employee->current_salary)
+                                            <span class="salary">${{ number_format($employee->current_salary) }}</span>
+                                        @else
+                                            <em>N/A</em>
+                                        @endif
+                                    </td>
+                                @break
+
+                                @case('earnings')
+                                    <td><strong>${{ number_format((float) $employee->total_earnings) }}</strong></td>
+                                @break
+
+                                @case('hire_date')
+                                    <td>{{ \Carbon\Carbon::parse($employee->hire_date)->format('M d, Y') }}</td>
+                                @break
+
+                                @case('gender')
+                                    <td>
+                                        <span class="{{ $employee->gender === 'M' ? 'gender-male' : 'gender-female' }}">
+                                            {{ $employee->gender === 'M' ? 'M' : 'F' }}</span>
+                                    </td>
+                                @break
+
+                                @case('status')
+                                    <td>{{ $employee->current_dept_name ? 'Active' : 'Former' }}</td>
+                                @break
+                            @endswitch
+                        @endforeach
+                    </tr>
+                @endforeach
+            </tbody>
+        </table>
+    @endforeach
 
     <div class="footer">
         <p>

@@ -1,6 +1,11 @@
 <?php
 
+use App\Providers\AppServiceProvider;
+use App\Providers\AuthorizationServiceProvider;
+use App\Providers\DataToolsServiceProvider;
+
 return [
-    App\Providers\AppServiceProvider::class,
-    App\Providers\AuthorizationServiceProvider::class,
+    AppServiceProvider::class,
+    AuthorizationServiceProvider::class,
+    DataToolsServiceProvider::class,
 ];
