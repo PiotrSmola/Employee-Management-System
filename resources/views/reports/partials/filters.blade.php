@@ -38,6 +38,7 @@
             @else
                 {{ __('State of the company on :date. Histories run up to that day.', ['date' => $context->asOf->format('d.m.Y')]) }}
             @endif
+            {{ __('Dates are moved to the end of their month.') }}
         </div>
     </div>
 </div>

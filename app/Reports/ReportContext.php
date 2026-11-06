@@ -17,7 +17,9 @@ use Illuminate\Database\Query\Builder;
  *    restricted to the employees they may see (EmployeeVisibility::constrain()).
  *  - as-of date: the state of the company on that day. A history row counts on
  *    day D when from_date <= D < to_date (to_date 9999-01-01 = still open).
- *    Today or later means "current" (cached as such, computed for today).
+ *    Today or later means "current". A date before the first hire is empty and
+ *    runs no query. Dates from a request are moved to the end of their month, which
+ *    bounds how many cached versions of a report can exist.
  */
 final class ReportContext
 {
@@ -29,6 +31,7 @@ final class ReportContext
         public readonly ?string $department,
         public readonly CarbonImmutable $asOf,
         public readonly bool $current,
+        private readonly bool $beforeHistory,
     ) {}
 
     public static function make(EmployeeVisibility $visibility, ?string $department = null, ?CarbonImmutable $asOf = null): self
@@ -39,8 +42,10 @@ final class ReportContext
 
         $today = CarbonImmutable::today();
         $current = $asOf === null || $asOf->startOfDay()->gte($today);
+        $date = $current ? $today : $asOf->startOfDay();
+        $earliest = $current ? null : CompanyHistory::earliestHireDate();
 
-        return new self($visibility, $department, $current ? $today : $asOf->startOfDay(), $current);
+        return new self($visibility, $department, $date, $current, $earliest !== null && $date->toDateString() < $earliest);
     }
 
     /**
@@ -52,26 +57,42 @@ final class ReportContext
      */
     public static function fromInput(EmployeeVisibility $visibility, array $input, array &$errors = []): self
     {
-        $department = is_string($input['department'] ?? null) && $input['department'] !== '' ? $input['department'] : null;
+        $department = null;
+        $rawDepartment = $input['department'] ?? null;
 
-        if ($department !== null && ! $visibility->isDepartmentScoped() && ! Department::whereKey($department)->exists()) {
-            $errors['department'] = __('Unknown department - showing all departments.');
-            $department = null;
+        // A manager's department is forced in make(), whatever the request says.
+        if (! $visibility->isDepartmentScoped() && $rawDepartment !== null && $rawDepartment !== '') {
+            // The database value: the column's collation also matches "D005" and "d005 ".
+            $department = is_string($rawDepartment) ? Department::find($rawDepartment)?->dept_no : null;
+
+            if ($department === null) {
+                $errors['department'] = __('Unknown department - showing all departments.');
+            }
         }
 
         $asOf = null;
-        $raw = $input['as_of'] ?? null;
-        if (is_string($raw) && $raw !== '') {
-            $parsed = preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw) ? CarbonImmutable::createFromFormat('!Y-m-d', $raw) : false;
+        $rawDate = $input['as_of'] ?? null;
+        if ($rawDate !== null && $rawDate !== '') {
+            $asOf = is_string($rawDate) ? self::parseDate($rawDate)?->endOfMonth()->startOfDay() : null;
 
-            if ($parsed === false || $parsed->format('Y-m-d') !== $raw || $parsed->year < self::EARLIEST_YEAR) {
+            if ($asOf === null) {
                 $errors['as_of'] = __('Invalid date - showing the current state.');
-            } else {
-                $asOf = $parsed;
             }
         }
 
         return self::make($visibility, $department, $asOf);
+    }
+
+    /** A real calendar date in the format Y-m-d, or null. */
+    public static function parseDate(string $value): ?CarbonImmutable
+    {
+        if (! preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+            return null;
+        }
+
+        $date = CarbonImmutable::createFromFormat('!Y-m-d', $value);
+
+        return $date !== null && $date->format('Y-m-d') === $value && $date->year >= self::EARLIEST_YEAR ? $date : null;
     }
 
     /** A manager without a department sees nobody - every report is empty. */
@@ -80,10 +101,16 @@ final class ReportContext
         return $this->visibility->isDepartmentScoped() && $this->visibility->department() === null;
     }
 
+    /** The as-of date is before the first hire. */
+    public function isBeforeHistory(): bool
+    {
+        return $this->beforeHistory;
+    }
+
     /** Nothing to compute: every report of this context is empty, no query runs. */
     public function isEmpty(): bool
     {
-        return $this->seesNobody();
+        return $this->beforeHistory || $this->seesNobody();
     }
 
     public function isDepartmentScoped(): bool
@@ -110,10 +137,13 @@ final class ReportContext
         return $this->department === null ? 'all' : 'dept-'.$this->department;
     }
 
-    /** Cache key part of the date: current | Y-m-d. */
+    /**
+     * Cache key part of the date: current-<today> | Y-m-d. Today is part of the key
+     * because ages and tenures of the current state change with the date.
+     */
     public function asOfKey(): string
     {
-        return $this->current ? 'current' : $this->date();
+        return ($this->current ? 'current-' : '').$this->date();
     }
 
     /** Query string to reproduce this context (links, CSV downloads). */

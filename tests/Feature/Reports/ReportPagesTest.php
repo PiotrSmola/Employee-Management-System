@@ -17,6 +17,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Testing\TestResponse;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\ActsAsAdmin;
@@ -118,11 +119,11 @@ class ReportPagesTest extends TestCase
 
     public function test_filters_are_applied_and_kept_in_links(): void
     {
-        $response = $this->get(route('reports.workforce', ['department' => 'd002', 'as_of' => '2000-01-01']))->assertOk();
+        $response = $this->get(route('reports.workforce', ['department' => 'd002', 'as_of' => '2000-01-15']))->assertOk();
 
-        $response->assertViewHas('context', fn (ReportContext $c) => $c->department === 'd002' && $c->date() === '2000-01-01')
+        $response->assertViewHas('context', fn (ReportContext $c) => $c->department === 'd002' && $c->date() === '2000-01-31')
             ->assertViewHas('summary', fn (array $s) => $s['headcount'] === 3)
-            ->assertSee(route('reports.csv', ['report' => 'age', 'department' => 'd002', 'as_of' => '2000-01-01']));
+            ->assertSee(route('reports.csv', ['report' => 'age', 'department' => 'd002', 'as_of' => '2000-01-31']));
     }
 
     public function test_invalid_filters_fall_back_with_a_warning(): void
@@ -195,9 +196,10 @@ class ReportPagesTest extends TestCase
         $admin = EmployeeVisibility::for($this->user);
         $manager = EmployeeVisibility::for(User::factory()->manager('d001')->create());
 
-        $this->assertSame("reports:{$version}:snapshot:all:current", ReportCache::key('snapshot', ReportContext::make($admin)));
+        $today = now()->toDateString();
+        $this->assertSame("reports:{$version}:snapshot:all:current-{$today}", ReportCache::key('snapshot', ReportContext::make($admin)));
         $this->assertSame("reports:{$version}:snapshot:dept-d001:1995-12-31", ReportCache::key('snapshot', ReportContext::make($admin, 'd001', CarbonImmutable::parse('1995-12-31'))));
-        $this->assertSame("reports:{$version}:snapshot:mgr-d001:current", ReportCache::key('snapshot', ReportContext::make($manager, 'd002')));
+        $this->assertSame("reports:{$version}:snapshot:mgr-d001:current-{$today}", ReportCache::key('snapshot', ReportContext::make($manager, 'd002')));
     }
 
     public function test_history_tables_are_only_reached_through_report_sources(): void
@@ -212,6 +214,42 @@ class ReportPagesTest extends TestCase
                 $file->getContents(),
                 $file->getPathname(),
             );
+        }
+    }
+
+    public function test_a_cold_report_waits_for_the_running_computation(): void
+    {
+        $this->assertTrue(Cache::lock(ReportCache::LOCK, 60)->get());
+
+        $this->get(route('reports.workforce'))
+            ->assertStatus(503)
+            ->assertHeader('Retry-After', '30')
+            ->assertSee('These figures are being prepared');
+        $this->get(route('reports.csv', 'age'))->assertStatus(503);
+    }
+
+    public function test_cached_reports_are_served_during_a_computation(): void
+    {
+        $this->get(route('reports.workforce'))->assertOk();
+        $this->assertTrue(Cache::lock(ReportCache::LOCK, 60)->get());
+
+        $this->get(route('reports.workforce'))->assertOk();
+        $this->get(route('reports.csv', 'age'))->assertOk();
+    }
+
+    public function test_a_request_releases_the_computation_lock(): void
+    {
+        $this->get(route('reports.workforce'))->assertOk();
+
+        $lock = Cache::lock(ReportCache::LOCK, 60);
+        $this->assertTrue($lock->get());
+        $lock->release();
+    }
+
+    public function test_report_routes_are_throttled(): void
+    {
+        foreach (['reports.index', 'reports.workforce', 'reports.compensation', 'reports.csv'] as $name) {
+            $this->assertContains('throttle:60,1', Route::getRoutes()->getByName($name)->gatherMiddleware(), $name);
         }
     }
 

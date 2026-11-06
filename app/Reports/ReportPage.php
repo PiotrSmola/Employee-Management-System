@@ -46,7 +46,7 @@ final class ReportPage
 
     public function earliestDate(): string
     {
-        return ReportContext::EARLIEST_YEAR.'-01-01';
+        return CompanyHistory::earliestHireDate() ?? ReportContext::EARLIEST_YEAR.'-01-01';
     }
 
     public function latestDate(): string

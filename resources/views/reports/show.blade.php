@@ -44,6 +44,12 @@
 
         @include('reports.partials.filters')
 
+        @if ($context->isBeforeHistory())
+            <div class="alert alert-info">
+                <i class="bi bi-info-circle me-2"></i>{{ __('The company has no history before :date.', ['date' => $page->earliestDate()]) }}
+            </div>
+        @endif
+
         @foreach ($inputErrors as $message)
             <div class="alert alert-warning py-2"><i class="bi bi-exclamation-triangle me-2"></i>{{ $message }}</div>
         @endforeach

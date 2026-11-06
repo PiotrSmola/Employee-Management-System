@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Department;
+use App\Reports\ReportCache;
 use App\Reports\ReportCatalog;
 use App\Reports\ReportContext;
 use App\Reports\ReportPage;
@@ -21,7 +22,10 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  */
 class ReportController extends Controller
 {
-    public function __construct(private readonly ReportCatalog $catalog) {}
+    public function __construct(
+        private readonly ReportCatalog $catalog,
+        private readonly ReportCache $cache,
+    ) {}
 
     public function index(Request $request): RedirectResponse
     {
@@ -46,9 +50,13 @@ class ReportController extends Controller
             Gate::authorize(Ability::VIEW_SALARIES);
         }
 
-        $this->allowColdComputation();
         $context = ReportContext::fromInput(EmployeeVisibility::for($request->user()), $request->query());
-        $table = $this->catalog->table($report, $context);
+
+        try {
+            $table = $this->catalog->table($report, $context);
+        } finally {
+            $this->cache->release();
+        }
 
         $filename = sprintf('report_%s_%s_%s.csv', $report, $context->department ?? 'all', $context->date());
 
@@ -64,11 +72,16 @@ class ReportController extends Controller
 
     private function page(Request $request, string $section): View
     {
-        $this->allowColdComputation();
         $errors = [];
         $context = ReportContext::fromInput(EmployeeVisibility::for($request->user()), $request->query(), $errors);
 
-        $summary = $this->catalog->summary($section, $context);
+        try {
+            $summary = $this->catalog->summary($section, $context);
+            $tables = $this->catalog->tables($section, $context);
+        } finally {
+            $this->cache->release();
+        }
+
         $departments = Department::query()->orderBy('dept_no')->pluck('dept_name', 'dept_no')->all();
 
         return view('reports.show', [
@@ -76,18 +89,8 @@ class ReportController extends Controller
             'context' => $context,
             'inputErrors' => $errors,
             'summary' => $summary,
-            'tables' => $this->catalog->tables($section, $context),
+            'tables' => $tables,
             'departments' => $departments,
         ]);
-    }
-
-    /**
-     * Figures that are not cached yet (other as-of dates, after a flush before the
-     * next reports:warm) are computed in the request; on the full dataset that can
-     * take longer than the default PHP time limit.
-     */
-    private function allowColdComputation(): void
-    {
-        set_time_limit(300);
     }
 }

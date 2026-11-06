@@ -61,7 +61,16 @@ final class EmployeeDataCache
     /** The current reports namespace (created on first use and after every flush). */
     public static function reportsVersion(): string
     {
-        return (string) Cache::rememberForever(self::REPORTS_VERSION, fn () => Str::lower(Str::random(8)));
+        $version = Cache::get(self::REPORTS_VERSION);
+
+        if ($version === null) {
+            // Concurrent first uses: add() lets one win, and everybody reads the winner.
+            $candidate = Str::lower(Str::random(8));
+            Cache::add(self::REPORTS_VERSION, $candidate, now()->addYears(10));
+            $version = Cache::get(self::REPORTS_VERSION, $candidate);
+        }
+
+        return (string) $version;
     }
 
     /** Retire every cached report, keep the other figures. */

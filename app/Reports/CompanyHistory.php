@@ -2,6 +2,8 @@
 
 namespace App\Reports;
 
+use App\Support\EmployeeDataCache;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -10,6 +12,16 @@ use Illuminate\Support\Facades\DB;
  */
 final class CompanyHistory
 {
+    /** The first hire date (index lookup, cached with the reports), null without employees. */
+    public static function earliestHireDate(): ?string
+    {
+        return Cache::remember(
+            EmployeeDataCache::report('earliest_hire'),
+            ReportCache::TTL,
+            fn () => DB::table('employees')->min('hire_date')
+        );
+    }
+
     /**
      * Year of the last hire or closed history row on or before $date (index lookups only).
      */
