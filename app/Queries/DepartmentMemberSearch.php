@@ -11,14 +11,16 @@ use Illuminate\Support\Facades\DB;
  * the "assign manager" select. A numeric term matches the employee number
  * (prefix), otherwise every word has to be the start of the first or last name.
  *
- * Reads the department's current dept_emp rows through the (dept_no, to_date)
- * index, so it stays fast for the largest department (~61k current employees).
+ * Without a term only the (dept_no, to_date) index is read. There is no index on
+ * names, so a name search looks at each employee once; only the matches are sorted.
  */
 class DepartmentMemberSearch
 {
     public const CURRENT = '9999-01-01';
 
     public const LIMIT = 20;
+
+    private const COLUMNS = ['e.emp_no', 'e.first_name', 'e.last_name', 'de.from_date as since'];
 
     /**
      * @return Collection<int, object{emp_no: int, first_name: string, last_name: string, since: string, title: ?string}>
@@ -27,16 +29,7 @@ class DepartmentMemberSearch
     {
         $term = trim($term);
 
-        $rows = DB::table('dept_emp as de')
-            ->join('employees as e', 'e.emp_no', '=', 'de.emp_no')
-            ->where('de.dept_no', $deptNo)
-            ->where('de.to_date', self::CURRENT)
-            ->when($term !== '', fn (Builder $q) => $this->match($q, $term))
-            ->orderBy('e.last_name')
-            ->orderBy('e.first_name')
-            ->orderBy('e.emp_no')
-            ->limit($limit)
-            ->get(['e.emp_no', 'e.first_name', 'e.last_name', 'de.from_date as since']);
+        $rows = $term === '' ? $this->first($deptNo, $limit) : $this->matching($deptNo, $term, $limit);
 
         $titles = $rows->isEmpty() ? collect() : DB::table('titles')
             ->whereIn('emp_no', $rows->pluck('emp_no'))
@@ -50,6 +43,40 @@ class DepartmentMemberSearch
             'since' => $row->since,
             'title' => $titles[$row->emp_no] ?? null,
         ]);
+    }
+
+    /**
+     * Without a term: the first employees by number, read from the (dept_no,
+     * to_date) index alone, which is already in that order.
+     */
+    private function first(string $deptNo, int $limit): Collection
+    {
+        $ids = DB::table('dept_emp')
+            ->where('dept_no', $deptNo)
+            ->where('to_date', self::CURRENT)
+            ->orderBy('emp_no')
+            ->limit($limit)
+            ->pluck('emp_no');
+
+        return $this->members($deptNo)->whereIn('e.emp_no', $ids)->orderBy('e.emp_no')->get(self::COLUMNS);
+    }
+
+    private function matching(string $deptNo, string $term, int $limit): Collection
+    {
+        return $this->match($this->members($deptNo), $term)
+            ->orderBy('e.last_name')
+            ->orderBy('e.first_name')
+            ->orderBy('e.emp_no')
+            ->limit($limit)
+            ->get(self::COLUMNS);
+    }
+
+    private function members(string $deptNo): Builder
+    {
+        return DB::table('dept_emp as de')
+            ->join('employees as e', 'e.emp_no', '=', 'de.emp_no')
+            ->where('de.dept_no', $deptNo)
+            ->where('de.to_date', self::CURRENT);
     }
 
     private function match(Builder $query, string $term): Builder

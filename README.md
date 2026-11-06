@@ -280,7 +280,8 @@ The system uses the following core entities:
   current manager's period ends on that date, the new one starts on it; the date must be after
   the current manager's start and not before the end of the last ended period, not before the
   employee joined the department and not in the future. *End management* closes the current period
-  without a successor. A former manager cannot (yet) manage the same department again. Every change is in the audit log (`department.*`) and clears the cached figures.
+  without a successor. A former manager cannot (yet) manage the same department again. Every
+  change is in the audit log (`department.*`) and clears the cached figures.
 - **Employee profile**: the manager of the employee's current department and a badge with the
   employee's own management periods.
 
@@ -310,6 +311,11 @@ The directory has to stay fast on ~300k employees / ~2.8M salary rows:
 Typical timings on the full dataset (Docker, warm-ish cache): unfiltered list ~0.1 s,
 single filters and sorts 0.1–0.6 s, combined filters up to ~2 s, full CSV export of all
 300k employees ~50 s (streamed).
+
+Department figures are cached for 30 minutes, so the index and department pages render in
+about 0.1 s. A cache miss computes the figures for all departments (index) or for one (page);
+changing employees or managers through the app clears them. Salary figures are read from the
+`(to_date, salary)` index instead of through each employee's salary history.
 
 The role restrictions do not change this: a viewer's list (salary data stripped) renders like an
 administrator's (~0.1–0.2 s). A manager's list is the department filter on their department

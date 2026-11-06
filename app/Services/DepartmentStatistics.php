@@ -32,6 +32,14 @@ class DepartmentStatistics
     /** Cache lifetime in seconds; writes through the app flush the keys right away. */
     private const TTL = 1800;
 
+    /**
+     * Optimizer hint for the salary figures: read the current salaries from the
+     * covering (to_date, salary) index and look up each employee's department.
+     * The optimizer's own choice, from dept_emp through the salaries primary
+     * key, reads every employee's whole salary history (most of the 2.8M rows).
+     */
+    private const SALARY_PLAN = '/*+ JOIN_ORDER(s, de) INDEX(s salaries_to_date_salary_index) */';
+
     /** Rows in the "recently joined" / "recently left" lists. */
     public const RECENT_LIMIT = 8;
 
@@ -174,10 +182,9 @@ class DepartmentStatistics
             ->selectRaw('de.dept_no, count(distinct t.title) as total')
             ->pluck('total', 'dept_no');
 
-        $salaries = $this->currentMembers()
-            ->join('salaries as s', fn (JoinClause $j) => $j->on('s.emp_no', '=', 'de.emp_no')->where('s.to_date', '=', self::CURRENT))
+        $salaries = $this->currentSalaries()
             ->groupBy('de.dept_no')
-            ->selectRaw('de.dept_no, avg(s.salary) as average')
+            ->selectRaw(self::SALARY_PLAN.' de.dept_no, avg(s.salary) as average')
             ->pluck('average', 'dept_no');
 
         $figures = [];
@@ -208,9 +215,8 @@ class DepartmentStatistics
             ->selectRaw("sum(e.gender = 'M') as male, sum(e.gender = 'F') as female, avg(datediff(curdate(), e.hire_date)) as tenure_days")
             ->first();
 
-        $salary = $members()
-            ->join('salaries as s', fn (JoinClause $j) => $j->on('s.emp_no', '=', 'de.emp_no')->where('s.to_date', '=', self::CURRENT))
-            ->selectRaw('avg(s.salary) as avg_salary, min(s.salary) as min_salary, max(s.salary) as max_salary')
+        $salary = $this->currentSalaries($deptNo)
+            ->selectRaw(self::SALARY_PLAN.' avg(s.salary) as avg_salary, min(s.salary) as min_salary, max(s.salary) as max_salary')
             ->first();
 
         $titles = $members()
@@ -284,22 +290,28 @@ class DepartmentStatistics
      */
     private function recentJoiners(string $deptNo): array
     {
-        return DB::table('dept_emp as de')
-            ->join('employees as e', 'e.emp_no', '=', 'de.emp_no')
-            ->where('de.dept_no', $deptNo)
-            ->orderByDesc('de.from_date')
-            ->orderByDesc('de.emp_no')
+        // Sorted on dept_emp alone: joining employees first would sort every
+        // assignment of the department with the names (85k rows for the largest).
+        $rows = DB::table('dept_emp')
+            ->where('dept_no', $deptNo)
+            ->orderByDesc('from_date')
+            ->orderByDesc('emp_no')
             ->limit(self::RECENT_LIMIT)
-            ->get(['de.emp_no', 'e.first_name', 'e.last_name', 'de.from_date', 'de.to_date', DB::raw('de.from_date = e.hire_date as hired')])
-            ->map(fn ($row) => [
-                'emp_no' => (int) $row->emp_no,
-                'first_name' => $row->first_name,
-                'last_name' => $row->last_name,
-                'date' => $row->from_date,
-                'hired' => (bool) $row->hired,
-                'still_here' => $row->to_date === self::CURRENT,
-            ])
-            ->all();
+            ->get(['emp_no', 'from_date', 'to_date']);
+
+        $people = DB::table('employees')
+            ->whereIn('emp_no', $rows->pluck('emp_no'))
+            ->get(['emp_no', 'first_name', 'last_name', 'hire_date'])
+            ->keyBy('emp_no');
+
+        return $rows->map(fn ($row) => [
+            'emp_no' => (int) $row->emp_no,
+            'first_name' => $people[$row->emp_no]->first_name,
+            'last_name' => $people[$row->emp_no]->last_name,
+            'date' => $row->from_date,
+            'hired' => $row->from_date === $people[$row->emp_no]->hire_date,
+            'still_here' => $row->to_date === self::CURRENT,
+        ])->all();
     }
 
     /**
@@ -332,6 +344,18 @@ class DepartmentStatistics
             'date' => $row->to_date,
             'moved_to' => $next->where('emp_no', $row->emp_no)->firstWhere('from_date', $row->to_date)?->dept_name,
         ])->all();
+    }
+
+    /**
+     * Current salaries (salaries as s) of the current employees (dept_emp as de),
+     * optionally of one department. Select with {@see self::SALARY_PLAN}.
+     */
+    private function currentSalaries(?string $deptNo = null): Builder
+    {
+        return DB::table('salaries as s')
+            ->join('dept_emp as de', fn (JoinClause $j) => $j->on('de.emp_no', '=', 's.emp_no')->where('de.to_date', '=', self::CURRENT))
+            ->where('s.to_date', self::CURRENT)
+            ->when($deptNo !== null, fn (Builder $q) => $q->where('de.dept_no', $deptNo));
     }
 
     /**
