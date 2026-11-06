@@ -272,8 +272,10 @@ The system uses the following core entities:
   Managers only see their own department; other department pages answer 403.
 - **Department page** (`/departments/{dept_no}`): headcount, women/men, average years with the
   company, average/min/max salary (`view-salaries` only), job titles, headcount at the end of each
-  year (chart), recent joiners and leavers, current manager and the full manager history, and a
-  link to the directory filtered to the department (`/employees?department=d005`).
+  year up to the last year with data (the imported dataset ends in 2002), recent joiners and
+  leavers, current manager and the full manager history, and a link to the directory filtered to
+  the department (`/employees?department=d005`). Headcounts count assignments (`dept_emp` rows). A
+  manager sees the history of their department without the names of people outside their scope.
 - **Managing** (`manage-departments`: admin, HR): create (code `d` + three digits, unique name),
   rename, delete (only a department that never had employees, managers or manager accounts).
   *Assign manager*: a current employee of the department (searchable) and an effective date - the
@@ -281,7 +283,7 @@ The system uses the following core entities:
   the current manager's start and not before the end of the last ended period, not before the
   employee joined the department and not in the future. *End management* closes the current period
   without a successor. A former manager cannot (yet) manage the same department again. Every
-  change is in the audit log (`department.*`) and clears the cached figures.
+  change is in the audit log (`department.*`).
 - **Employee profile**: the manager of the employee's current department and a badge with the
   employee's own management periods.
 
@@ -312,10 +314,12 @@ Typical timings on the full dataset (Docker, warm-ish cache): unfiltered list ~0
 single filters and sorts 0.1–0.6 s, combined filters up to ~2 s, full CSV export of all
 300k employees ~50 s (streamed).
 
-Department figures are cached for 30 minutes, so the index and department pages render in
-about 0.1 s. A cache miss computes the figures for all departments (index) or for one (page);
-changing employees or managers through the app clears them. Salary figures are read from the
-`(to_date, salary)` index instead of through each employee's salary history.
+Department figures are cached (15 minutes for the index, 30 for a department), so the pages
+render in about 0.1 s. They are refreshed by `php artisan departments:warm` (hourly, needs the
+scheduler: `php artisan schedule:run` every minute) and otherwise after the response of a reader,
+who gets the last good copy meanwhile. Only the very first visit, with nothing cached, computes
+them or says they are being prepared. Salary figures are read from the `(to_date, salary)` index
+instead of through each employee's salary history.
 
 The role restrictions do not change this: a viewer's list (salary data stripped) renders like an
 administrator's (~0.1–0.2 s). A manager's list is the department filter on their department
@@ -359,7 +363,7 @@ The application provides the following main routes:
 - `GET /employees/{emp_no}/export-pdf` - Individual PDF export
 - `GET /departments`, `GET /departments/{dept_no}` - Departments index and page (managers: own department only)
 - `GET /departments/create`, `POST /departments`, `GET /departments/{dept_no}/edit`, `PUT|DELETE /departments/{dept_no}` - Create, rename, delete (`manage-departments`)
-- `GET /departments/{dept_no}/manager-candidates?q=`, `POST /departments/{dept_no}/managers`, `POST /departments/{dept_no}/managers/end` - Department managers (`manage-departments`)
+- `GET /departments/{dept_no}/manager-candidates?q=` (60 requests per minute), `POST /departments/{dept_no}/managers`, `POST /departments/{dept_no}/managers/end` - Department managers (`manage-departments`)
 - `GET /account`, `PUT /account/profile`, `PUT /account/password` - My account
 - `/users` (resource without `show`), `PUT /users/{user}/password` - User management (`manage-users`)
 

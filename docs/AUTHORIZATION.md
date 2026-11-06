@@ -115,6 +115,14 @@ The scope constraint is a semi-join on `dept_emp` (indexed by `dept_no, to_date`
 fast on the full dataset (a manager's directory renders in about the same time as the
 department filter).
 
+On the department pages a manager only gets their own department (403 for others). That page
+keeps the department's history, but people outside the scope above are not identified: employees
+who moved to another department and former or current managers who are outside it appear
+without name, number, link or destination ("Employee moved to another department", "A manager
+outside your department"). The profile shows "–" instead of the name of a department manager outside
+the scope. The figures are cached once for everybody; `DepartmentStatistics` applies this per
+request from `EmployeeVisibility`.
+
 ## Accounts
 
 - No public registration and no e-mail password reset: administrators create accounts

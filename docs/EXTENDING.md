@@ -151,18 +151,46 @@ EmployeeDataCache::flush();                     // everything
 EmployeeDataCache::flush(['d001', 'd005']);     // company-wide keys + only these departments (e.g. a transfer)
 ```
 
-Keys: `dashboard_stats`, `employees_by_department`, `departments_overview`, `dashboard_stats:dept:<no>`,
-`employees_by_title:dept:<no>`, `job_titles:dept:<no>`, `department_details:dept:<no>`
-(`-` = manager without a department).
+Keys: `dashboard_stats`, `employees_by_department`, `dashboard_stats:dept:<no>`,
+`employees_by_title:dept:<no>`, `job_titles:dept:<no>` (`-` = manager without a department).
 New cached figures derived from employee data get a key method there and are added to
-`EmployeeDataCache::keys()`, so `flush()` keeps clearing everything.
+`EmployeeDataCache::keys()`, so `flush()` keeps clearing everything. Figures that hold department
+names are also cleared in `EmployeeDataCache::flushDepartmentNames()`, which runs on a rename.
+
+### Figures that are expensive to compute: `App\Support\FigureCache`
+
+The department figures take far longer to compute than a request should wait, so they use
+`FigureCache` instead of `Cache::remember()`: `departments_overview` and
+`department_details:dept:<no>`.
+
+```php
+['value' => $figures, 'status' => $status] = FigureCache::read($key, $ttl, $compute, $refreshLater);
+FigureCache::invalidate($key);
+FigureCache::refresh($key, $ttl, $compute);
+```
+
+- `status` is `FRESH`; `STALE`, the last good value, with `$refreshLater` called to dispatch a
+  refresh after the response; or `PREPARING`, value null: nothing cached yet and another process
+  is computing it. A reader waits two seconds for that process, then the page says so and reloads.
+- One compute per key at a time (`Cache::lock`, so the cache store must support locks).
+- `invalidate()` changes the generation in the key: a compute already running cannot make the
+  value fresh again. The stale copy stays for a week.
+- `php artisan departments:warm` recomputes all of them, hourly in `routes/console.php`. That
+  needs the scheduler (`php artisan schedule:run` every minute); without it readers still get
+  the stale copy and the refresh runs after their response.
+- A full `EmployeeDataCache::flush()` invalidates the overview and every department;
+  `flush(['d005'])` only those departments. The overview covers all departments and expires
+  after 15 minutes, so it is not recomputed for each change of one employee.
+- Cached payloads are shared between users: apply salary and scope rules when reading, as
+  `DepartmentStatistics` does, never before caching.
 
 ## Departments and department managers
 
 - Changes go through `App\Services\DepartmentManagementService` (`create`, `rename`, `delete`,
   `assignManager($department, $empNo, 'Y-m-d')`, `endManagement($department, 'Y-m-d')`): they
-  validate, log `department.created|renamed|deleted|manager_assigned|manager_ended` and flush the
-  cache. Callers check `manage-departments`.
+  validate, log `department.created|renamed|deleted|manager_assigned|manager_ended`. Callers check
+  `manage-departments`. Managers and department names are read live, so changing them leaves
+  the department figures cached.
 - The current manager has `to_date = 9999-01-01`. A change of manager on day D ends the old
   period on D and starts the new one on D; a new period never starts before the department's
   last ended period. Rows are picked by their dates, not by `(emp_no, dept_no)`. While that pair is
@@ -173,8 +201,12 @@ New cached figures derived from employee data get a key method there and are add
   should end the management too: `endManagement($department, $date)` (the date must be after
   the period's start).
 - Read-only figures: `App\Services\DepartmentStatistics` (`overview()`, `details()`,
-  `currentManagers()`, `managerHistory()`, `forEmployee()`); salary figures are only returned
-  when the caller passes `canSeeSalaries()`.
+  `currentManagers()`, `managerHistory()`, `forEmployee()`). `overview()` and `details()` take an
+  `EmployeeVisibility`: salary figures only with `view-salaries`, and employees outside a scoped
+  user's view come back with `hidden` set and no name or number.
+- Headcounts count current `dept_emp` rows (assignments), not distinct employees; the dataset has
+  one per employee. Headcount by year runs to the last year with data for every department; the
+  imported dataset ends in 2002.
 - The directory accepts an initial department: `route('employees.index', ['department' => 'd005'])`
   (the manager scope still wins).
 
