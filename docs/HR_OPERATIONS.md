@@ -86,13 +86,21 @@ controller authorizes `EmployeePolicy::create/update` again.
   (`snapshot`); if someone else changed the employee meanwhile the edit is rejected
   (optimistic locking).
 - **Double hires.** The hire form has a one-time token: a second submit of the same form
-  (double click, reload) does not hire again but leads to the employee hired with it. An
+  (double click, reload) does not hire again but leads to the employee hired with it. While a
+  submit is running the token is "pending" for at most two minutes, so a request that died
+  half way does not block the form for long. An
   existing employee with the same first name, last name and birth date is reported and needs
   the explicit confirmation *This is a different person - hire anyway*; the check reads the index
   `(birth_date, last_name, first_name)` of `employees`.
 - **Corrections** fix typos in the amount of the most recent salary row and the wording of the
   most recent title row of a **current** employee (the history of former employees is closed;
   rehire them or undo instead). Dates are not changed; a reason is required and logged.
+- **Stale forms.** Corrections post the row the form showed (`row_from_date`, `row_salary` /
+  `row_title`) and a change in percent the salary it was entered for (`shown_salary`). If the
+  locked latest row differs at submit time the form is refused: "The data changed in the
+  meantime". Personal data does the same with its `snapshot`.
+- **Salaries and HR rights.** `manage-employees` does not imply `view-salaries`: without it the
+  profile gets no figures and no salary forms, and the salary routes answer 403.
 - **Undo last change.** The most recent HR operation on an employee - except a hire - can be
   reversed exactly, within 24 hours and only while nothing else changed that employee's records:
   - the audit entry of every operation keeps its row changes (closed rows, inserted rows,
@@ -144,15 +152,18 @@ controller authorizes `EmployeePolicy::create/update` again.
   stay usable as covering indexes with the `void_log_id = 0` condition and none of them needed
   the column appended (checked with EXPLAIN on the full dataset). The one exception is
   `SELECT DISTINCT title`, which lost its loose index scan; `titles (title, void_log_id)`
-  (migration `add_active_title_index_to_titles`) brings it back. `down()` leaves a table
-  with voided rows as it is; otherwise it drops the column and restores the old key
-  (`dept_emp` / `dept_manager` keep `from_date` if an employee has several periods in one
-  department).
+  (migration `add_active_title_index_to_titles`) brings it back. `down()` refuses the whole rollback if any
+  table has voided rows (the column is their only mark); otherwise it drops the column and
+  restores the old key (`dept_emp` / `dept_manager` keep `from_date` if an employee has several
+  periods in one department). The migration needs MySQL.
 - `employees`: index `(birth_date, last_name, first_name)` for the duplicate check of the hire
   form (migration `add_duplicate_check_index_to_employees`, idempotent, built online).
 - `activity_log`: virtual generated column `action_group` (`employee` for `employee.hired`)
   with the index `(action_group, created_at)`, and the index `(user_id, created_at)`
   (migration `add_filter_indexes_to_activity_log`).
+
+**Never truncate `activity_log`.** `void_log_id` holds audit entry ids: after a truncate the ids
+are handed out again and voided rows would point at unrelated entries.
 
 ## Voided rows
 
@@ -162,8 +173,11 @@ application. **Every query over these tables excludes them** with `App\Support\H
 `DeptEmp`, `DeptManager`, `Title`, `Salary` do it with a global scope, the relations of `Employee`
 and `Department` with `wherePivot`. Voided rows play no part in the rules of the HR operations
 (a new row may start on the date of a voided one). `VoidedRowsTest` checks list, filters, sorts,
-counts, profile, charts, PDF, CSV, dashboard and manager scope; `VoidedRowsGuardTest` scans
-`app/` and fails for a query over these tables without the filter, and for a `DELETE` on them.
+counts, profile, charts, PDF, CSV, dashboard and manager scope. `VoidedRowsGuardTest` scans
+`app/` and fails for a reference to these tables without its own filter, for a `DELETE` or
+`TRUNCATE` on them and for `withoutGlobalScope(s)` / `newQueryWithoutScopes`.
+`VoidedRowsRuntimeGuardTest` runs the read paths with `DB::listen` and fails for SQL that touches
+these tables without `void_log_id`; a new screen adds its path to `readPaths()` there.
 
 ## Audit entries (`changes`)
 

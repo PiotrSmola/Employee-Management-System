@@ -8,6 +8,7 @@ use App\Models\Employee;
 use App\Services\EmployeeNumberAllocator;
 use App\Services\EmployeeOperationsService;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -160,9 +161,7 @@ class HireEmployeeTest extends HrOperationsTestCase
         {
             public int $calls = 0;
 
-            public function __construct(private readonly int $taken)
-            {
-            }
+            public function __construct(private readonly int $taken) {}
 
             public function next(): int
             {
@@ -185,9 +184,7 @@ class HireEmployeeTest extends HrOperationsTestCase
         $taken = $this->currentEmployee();
         $this->app->instance(EmployeeNumberAllocator::class, new class($taken->emp_no) extends EmployeeNumberAllocator
         {
-            public function __construct(private readonly int $taken)
-            {
-            }
+            public function __construct(private readonly int $taken) {}
 
             public function next(): int
             {
@@ -195,7 +192,7 @@ class HireEmployeeTest extends HrOperationsTestCase
             }
         });
 
-        $this->expectException(\Illuminate\Database\UniqueConstraintViolationException::class);
+        $this->expectException(UniqueConstraintViolationException::class);
 
         try {
             app(EmployeeOperationsService::class)->hire($this->payload());

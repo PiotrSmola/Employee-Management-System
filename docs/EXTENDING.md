@@ -170,8 +170,11 @@ DB::raw('(SELECT ... FROM salaries s WHERE s.emp_no = e.emp_no AND '.HistoryRows
 
 The models `Salary`, `Title`, `DeptEmp` and `DeptManager` apply it with a global scope, and
 `EmployeeSearchQuery::departmentMembership()` applies it itself. Never `DELETE` from these
-tables. `tests/Feature/HrOperations/VoidedRowsGuardTest.php` fails for code under `app/` that
-reads them without the filter (a reasoned exception goes into its allowlist).
+tables, never use `withoutGlobalScope(s)` on these models, and never truncate `activity_log`
+(`void_log_id` holds its ids). `tests/Feature/HrOperations/VoidedRowsGuardTest.php` fails for
+code under `app/` that reads them without the filter (a reasoned exception goes into its
+allowlist). `VoidedRowsRuntimeGuardTest` checks the SQL of the read paths: **add your new
+screen or report to its `readPaths()`**.
 
 ## Changing employees: `App\Services\EmployeeOperationsService`
 

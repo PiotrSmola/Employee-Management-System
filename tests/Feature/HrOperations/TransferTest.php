@@ -3,6 +3,7 @@
 namespace Tests\Feature\HrOperations;
 
 use App\Models\Department;
+use App\Queries\EmployeeSearchQuery;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 
@@ -85,8 +86,8 @@ class TransferTest extends HrOperationsTestCase
 
         // The directory, the manager scope and the profile see the employee in Sales again.
         $this->get(route('employees.show', $employee->emp_no))->assertSee('Sales');
-        $this->assertSame(1, \App\Queries\EmployeeSearchQuery::departmentMembership(DB::table('dept_emp as de_f'), $this->sales->dept_no)->count());
-        $this->assertSame(0, \App\Queries\EmployeeSearchQuery::departmentMembership(DB::table('dept_emp as de_f'), $this->research->dept_no)->count());
+        $this->assertSame(1, EmployeeSearchQuery::departmentMembership(DB::table('dept_emp as de_f'), $this->sales->dept_no)->count());
+        $this->assertSame(0, EmployeeSearchQuery::departmentMembership(DB::table('dept_emp as de_f'), $this->research->dept_no)->count());
     }
 
     public function test_a_former_employee_belongs_to_the_department_of_the_latest_period(): void
@@ -95,7 +96,7 @@ class TransferTest extends HrOperationsTestCase
         $this->post(route('employees.transfer', $employee->emp_no), ['dept_no' => $this->sales->dept_no, 'effective_date' => '2024-05-01'])->assertSessionHasNoErrors();
         $this->post(route('employees.terminate', $employee->emp_no), ['end_date' => '2025-01-31'])->assertSessionHasNoErrors();
 
-        $members = fn (Department $d) => \App\Queries\EmployeeSearchQuery::departmentMembership(DB::table('dept_emp as de_f'), $d->dept_no, 'former')->pluck('de_f.emp_no')->all();
+        $members = fn (Department $d) => EmployeeSearchQuery::departmentMembership(DB::table('dept_emp as de_f'), $d->dept_no, 'former')->pluck('de_f.emp_no')->all();
         $this->assertSame([$employee->emp_no], $members($this->sales));
         $this->assertSame([], $members($this->research));
     }
