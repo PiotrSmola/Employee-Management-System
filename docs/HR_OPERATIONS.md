@@ -141,7 +141,10 @@ controller authorizes `EmployeePolicy::create/update` again.
   table (online: the table is rebuilt while reads and writes continue). The foreign keys on
   `emp_no` keep an `emp_no`-leading index (the primary key), the one on `dept_no` its `dept_no`
   index. InnoDB secondary indexes contain the primary key columns, so the directory indexes
-  stay usable as covering indexes with the `void_log_id = 0` condition. `down()` leaves a table
+  stay usable as covering indexes with the `void_log_id = 0` condition and none of them needed
+  the column appended (checked with EXPLAIN on the full dataset). The one exception is
+  `SELECT DISTINCT title`, which lost its loose index scan; `titles (title, void_log_id)`
+  (migration `add_active_title_index_to_titles`) brings it back. `down()` leaves a table
   with voided rows as it is; otherwise it drops the column and restores the old key
   (`dept_emp` / `dept_manager` keep `from_date` if an employee has several periods in one
   department).

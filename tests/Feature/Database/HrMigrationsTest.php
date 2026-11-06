@@ -21,6 +21,8 @@ class HrMigrationsTest extends TestCase
 
     private const DUPLICATE_INDEX = '2026_11_06_000003_add_duplicate_check_index_to_employees';
 
+    private const TITLE_INDEX = '2026_11_06_000004_add_active_title_index_to_titles';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -178,6 +180,22 @@ class HrMigrationsTest extends TestCase
         $this->assertNotContains($name, $indexes());
 
         $this->migration(self::DUPLICATE_INDEX)->up();
+        $this->assertContains($name, $indexes());
+    }
+
+    public function test_the_active_title_index_is_added_idempotently(): void
+    {
+        $name = 'titles_title_void_log_id_index';
+        $indexes = fn () => array_map(fn ($i) => strtolower($i['name']), Schema::getIndexes('titles'));
+
+        $this->assertContains($name, $indexes());
+
+        $this->migration(self::TITLE_INDEX)->up();
+        $this->migration(self::TITLE_INDEX)->down();
+        $this->migration(self::TITLE_INDEX)->down();
+        $this->assertNotContains($name, $indexes());
+
+        $this->migration(self::TITLE_INDEX)->up();
         $this->assertContains($name, $indexes());
     }
 }
