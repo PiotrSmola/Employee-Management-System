@@ -653,6 +653,10 @@ th[style*="cursor: pointer"]:hover {
     color: #b7dbe6 !important;
 }
 
+[data-bs-theme="dark"] .table-info .text-success {
+    color: #6ee7b7 !important;
+}
+
 [data-bs-theme="dark"] .table-info a {
     color: #9fd8ec;
 }
