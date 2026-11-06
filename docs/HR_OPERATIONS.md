@@ -66,7 +66,9 @@ controller authorizes `EmployeePolicy::create/update` again.
   transfer date (the form warns about it, the flash message and the audit entry
   (`ended_management`) say so); the department has no current manager until one is assigned.
   Managing *another* department is not affected by a transfer. A termination ends every
-  current management of the employee.
+  current management of the employee. These go through the same code as *End management* on
+  the department page (`DepartmentManagementService::endPeriods()`), so the department's
+  history gets the same `department.manager_ended` entry, with `cause` set to the operation.
 - **Several current departments** (old data): a transfer and a termination close all of them.
 - **Rehire** needs a former employee and a start date after the end of the last employment.
   Stray current title, salary or management rows of the former employee (old data) are closed
@@ -118,18 +120,24 @@ controller authorizes `EmployeePolicy::create/update` again.
     `restored_values`). The original entry stays untouched. Only one level: the undo entry is
     now the latest one, and it cannot be undone itself, so neither the undo nor the operation
     before it can be reversed;
+  - a management the operation ended is reopened (`department.manager_restored`), unless
+    another employee has managed the department since: then the undo is refused, the
+    department would have two current managers;
+  - all cached figures are flushed, also the departments overview: an undo removes rows that
+    any of them may contain;
   - voided rows are hidden everywhere (see *Voided rows*) and stay visible through the audit log:
     the undo entry lists them, and the original entry shows that it was undone, by whom and when;
   - **a hire cannot be undone** (its entry has no `_undo`, the service refuses it and the profile
     offers no undo right after a hire): a wrongly entered person is handled by editing the
     personal data or by terminating the employment. Entries written without `_undo` cannot be
     undone either.
-- **Employee numbers** are the next free number: `EmployeeNumberAllocator::next()` reads the
-  highest number with a locking read (`ORDER BY emp_no DESC LIMIT 1 FOR UPDATE`, a next-key lock
-  that makes concurrent hires wait - the same approach as the data import), tested with two
-  real connections. A hire is retried up to 5 times with a short random pause when the number
-  was taken meanwhile by a writer that does not use the lock, and - when the hire is not part
-  of an outer transaction - on a deadlock (1213) or lock wait timeout (1205).
+- **Employee numbers** are the next free number, the same way for a hire and an import:
+  `EmployeeNumberAllocator::next()` reads the highest number with a locking read (`ORDER BY emp_no
+  DESC LIMIT 1 FOR UPDATE`, a next-key lock that makes concurrent allocations wait), tested with
+  two real connections. `EmployeeNumberAllocator::transaction()` repeats the whole transaction up
+  to 5 times with a short random pause when the number was taken meanwhile by a writer that does
+  not use the lock, and - when it is not part of an outer transaction - on a deadlock (1213) or
+  lock wait timeout (1205).
 
 ## Schema
 
@@ -173,7 +181,8 @@ application. **Every query over these tables excludes them** with `App\Support\H
 `DeptEmp`, `DeptManager`, `Title`, `Salary` do it with a global scope, the relations of `Employee`
 and `Department` with `wherePivot`. Voided rows play no part in the rules of the HR operations
 (a new row may start on the date of a voided one). `VoidedRowsTest` checks list, filters, sorts,
-counts, profile, charts, PDF, CSV, dashboard and manager scope. `VoidedRowsGuardTest` scans
+counts, profile, charts, PDF, CSV, dashboard, manager scope, departments, reports, API, exports
+and import. `VoidedRowsGuardTest` scans
 `app/` and fails for a reference to these tables without its own filter, for a `DELETE` or
 `TRUNCATE` on them and for `withoutGlobalScope(s)` / `newQueryWithoutScopes`.
 `VoidedRowsRuntimeGuardTest` runs the read paths with `DB::listen` and fails for SQL that touches

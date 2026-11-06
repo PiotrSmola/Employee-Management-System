@@ -25,13 +25,13 @@ Use the constants in `App\Support\Ability` (or the string names in Blade / route
 | Gate | admin | hr | manager | viewer | Guards |
 |------|:-----:|:--:|:-------:|:------:|--------|
 | `view-salaries` | ✓ | ✓ | ✓ | – | every salary figure (see below) |
-| `manage-employees` | ✓ | ✓ | – | – | creating / editing / deleting employees (`EmployeePolicy::create/update/delete`) |
+| `manage-employees` | ✓ | ✓ | – | – | hiring and changing employees: personal data, transfer, title, salary, termination, rehire, corrections, undo ([HR_OPERATIONS.md](HR_OPERATIONS.md); `EmployeePolicy::create/update`). Employees are never deleted |
 | `manage-departments` | ✓ | ✓ | – | – | creating / editing departments and department managers |
 | `manage-users` | ✓ | – | – | – | Users screen (`/users`) |
-| `view-audit-log` | ✓ | ✓ | – | – | audit log |
+| `view-audit-log` | ✓ | ✓ | – | – | audit log (`/audit-log`) and *Change history* on a profile |
 | `export-data` | ✓ | ✓ | ✓ | – | bulk CSV / XLSX / PDF export of the directory (`POST /employees/export`), My exports (`/exports`, own exports only), REST API and creating API tokens |
 | `import-data` | ✓ | ✓ | – | – | employee import (`/employees/import`) |
-| `view-reports` | ✓ | ✓ | ✓ | – | reports |
+| `view-reports` | ✓ | ✓ | ✓ | – | reports (`/reports`; compensation pages and CSVs also need `view-salaries`) |
 
 ```php
 Route::get('/reports', ...)->middleware('can:'.Ability::VIEW_REPORTS);   // route
@@ -87,7 +87,8 @@ All other roles see every employee.
 
 It is applied in one place, `App\Support\EmployeeVisibility`, used by the directory list and
 filters, profile + profile PDF (403 outside the scope), bulk export (ids outside the scope are
-dropped), the dashboard (figures of the manager's department) and the reports. In reports a
+dropped; the worker applies the owner's scope as it is at that time), the REST API, the dashboard
+(figures of the manager's department) and the reports. In reports a
 manager's department filter is forced to their department, and on top of that only the employees
 in their scope count: people who moved to another department are left out of the department's
 history there, while an administrator filtering by that department sees every row of it.

@@ -1,6 +1,6 @@
 # Employee Management System
 
-A comprehensive web-based employee management platform built with Laravel 12, designed to handle employee data, departments, salaries, and job titles with advanced reporting capabilities.
+A web-based employee management platform built with Laravel 12 on the MySQL "employees" sample dataset (~300k employees, ~2.8M salary rows): directory, HR operations with a full audit trail, departments and managers, reports, bulk data tools and a REST API, with role-based access throughout.
 
 ## Features
 
@@ -8,16 +8,19 @@ A comprehensive web-based employee management platform built with Laravel 12, de
 - **Employee Directory**: Browse and search through employee records with pagination
 - **Individual Employee Profiles**: Detailed view with employment history, salary progression, and department changes
 - **Departments**: Department pages with headcount, gender split, tenure, salary figures, job titles, headcount per year and manager history; admins and HR create, rename and delete departments and assign department managers (see [Department Pages and Managers](#department-pages-and-managers))
-- **Dashboard Analytics**: Real-time statistics and insights with caching for optimal performance
+- **Dashboard Analytics**: Company and department statistics, cached for optimal performance
 - **Accounts & Roles**: Sign-in, four roles (admin, HR, manager, viewer), department-scoped managers, salary data only for authorized roles, admin user management
+- **HR Operations**: Hire, personal data, transfer, title and salary changes, termination, rehire, corrections and undo of the last change (see [HR Operations and Audit Log](#hr-operations-and-audit-log))
+- **Audit Log**: Every change with its before and after values, filterable, and as change history on each profile
 
 ### Advanced Features
+- **Reports**: Workforce and compensation reports as charts, tables and CSV, for any department and any past month (see [Reports & Analytics](#reports--analytics))
 - **Export Capabilities**: Generate PDF reports for individual employees and bulk CSV / Excel (XLSX) / PDF exports with a column chooser; large exports run in the background ("My exports")
 - **Import**: New employees from CSV / XLSX with a validation preview
 - **REST API**: Read-only JSON API with personal access tokens ([docs/API.md](docs/API.md))
 - **Historical Tracking**: Complete employment history including department transfers, title changes, and salary adjustments
 - **Status Management**: Track active vs. former employees
-- **Performance Optimization**: Intelligent caching system for frequently accessed data
+- **Performance**: Index-ordered list queries and precomputed figures (see [Performance Notes](#performance-notes))
 
 ### Technical Highlights
 - **Responsive Design**: Mobile-friendly interface built with Bootstrap
@@ -31,18 +34,22 @@ A comprehensive web-based employee management platform built with Laravel 12, de
 - **Framework**: Laravel 12.x
 - **PHP**: 8.3+
 - **Database**: MySQL 8.0+ (the directory queries use MySQL optimizer hints and the index migration builds indexes online with `ALGORITHM=INPLACE`; other databases are not supported)
-- **Frontend**: Bootstrap 5, Blade templating
+- **Frontend**: Bootstrap 5.3 and Chart.js from a CDN, Blade templating
 - **PDF Generation**: Laravel DomPDF
+- **Spreadsheets**: OpenSpout (XLSX)
+- **API**: Laravel Sanctum (personal access tokens)
 - **Interactive Components**: Livewire 3.8
-- **Development Tools**: Laravel Sail, Pint (code formatting)
+- **Development Tools**: Pint (code formatting)
 
 ## Requirements
 
 - PHP 8.3 or higher
 - Composer
-- Node.js & NPM (for asset compilation)
 - MySQL 8.0+
 - Web server (Apache/Nginx)
+- A queue worker and the scheduler for large exports and precomputed figures (the Docker setup includes both)
+
+There is no asset build: CSS and JavaScript are plain files under `public/`.
 
 ## Quick Start with Docker (recommended)
 
@@ -77,12 +84,13 @@ Preferred ports can be overridden: `.\docker-up.ps1 -AppPort 8080 -DbPort 3310` 
 |---------|-----------|-----------|-------------|
 | App (Apache + PHP 8.3) | `app` | `APP_PORT` (default 8000) | – |
 | Queue worker (`queue:work`, large exports) | `worker` | – | – |
-| Scheduler (`schedule:work`, export cleanup) | `scheduler` | – | – |
-| MySQL 8.0 | `db` | `FORWARD_DB_PORT` (default 3306) | db `employees_management`, user `laravel` / `secret`, root / `root` |
+| Scheduler (`schedule:work`: `reports:warm` and `departments:warm` hourly, `exports:prune` daily) | `scheduler` | – | – |
+| MySQL 8.0 (InnoDB buffer pool 1 GB, `DB_BUFFER_POOL_SIZE`) | `db` | `FORWARD_DB_PORT` (default 3306) | db `employees_management`, user `laravel` / `secret`, root / `root` |
 
 `worker` and `scheduler` use the app image (as `www-data`, without the app's entrypoint) and
-share the `exports-data` volume (`storage/app/exports`) with `app`. Follow the worker with
-`docker compose --env-file .env.docker logs -f worker`.
+share two volumes with `app`: `exports-data` (`storage/app/exports`) and `cache-data`
+(`storage/framework/cache`), so that figures warmed by the scheduler reach the app, and a flush
+in the app reaches them. Follow them with `docker compose --env-file .env.docker logs -f worker scheduler`.
 
 Useful commands:
 ```bash
@@ -101,6 +109,8 @@ schema migrations are no-ops; the first run adds the directory indexes online
 `UserSeeder`, which creates the initial accounts if they do not exist yet (see
 [Accounts and Roles](#accounts-and-roles)). Set `ADMIN_EMAIL` / `ADMIN_PASSWORD`
 (and `SEED_DEMO_USERS=false` to skip the demo accounts) in `.env.docker` before the first start.
+On the first start it also computes the department and report figures in the background: the
+app is already usable, and the first visitors find them cached.
 
 > Never run `migrate:fresh`, `migrate:refresh` or `db:wipe` against the Docker
 > database – they drop the imported employees dataset.
@@ -225,7 +235,7 @@ remembered in the browser). Salary columns are only offered - and only ever writ
 `php artisan queue:work --tries=1 --timeout=1800`. The queue's `retry_after`
 (`DB_QUEUE_RETRY_AFTER`, 1900 s in Docker) must stay above the timeout. Without Docker run
 `php artisan queue:work --tries=1 --timeout=1800` and `php artisan schedule:work` (or a cron
-entry for `schedule:run`) next to the web server. Failed exports are shown as *Failed* with a
+entry for `schedule:run`) next to the web server, all with the same cache. Failed exports are shown as *Failed* with a
 short reason (details in the log); a crashed or timed-out job is marked failed as well.
 
 ### Import (`import-data`: admin, HR)
@@ -372,8 +382,9 @@ The system uses the following core entities:
   current manager's period ends on that date, the new one starts on it; the date must be after
   the current manager's start and not before the end of the last ended period, not before the
   employee joined the department and not in the future. *End management* closes the current period
-  without a successor. A former manager cannot (yet) manage the same department again. Every
-  change is in the audit log (`department.*`).
+  without a successor. A former manager can manage the department again, in a new period.
+  Transferring or terminating a manager ends the management the same way. Every change is in
+  the audit log (`department.*`).
 - **Employee profile**: the manager of the employee's current department and a badge with the
   employee's own management periods.
 
@@ -389,18 +400,13 @@ The system uses the following core entities:
   (history rows with `from_date <= day < to_date`); the yearly series end on that day
 - Department filter (admins, HR), Chart.js charts (light and dark mode), every report as a
   table and as a CSV download
-- Figures are cached (24 h, cleared by `EmployeeDataCache::flush()`) and precomputed by
-  `php artisan reports:warm`, scheduled hourly - run the scheduler (`php artisan schedule:work`
-  or a cron entry for `schedule:run`) in production
-- Requests compute uncached figures one at a time: while one runs, others that need an uncached
-  figure get a "try again" page (503 with `Retry-After`), cached reports stay available. Report
-  routes allow 60 requests per minute per user
-
-### Export System
-- Individual employee PDF reports
-- Bulk data export capabilities
-- Formatted reports with company branding
-- Pagination support for large datasets
+- Figures are precomputed by `php artisan reports:warm`, scheduled hourly (the `scheduler` service;
+  without Docker `php artisan schedule:work`). After a change of the data, and at midnight for
+  the current state, the next visitor gets the last computed figures at once, with a note,
+  and they are refreshed in the background
+- A figure that was never computed (e.g. a new as-of month) is computed once: while one
+  request does that, others asking for it get a "being prepared" page (503 with `Retry-After`).
+  Report routes allow 60 requests per minute per user
 
 ## Performance Notes
 
@@ -419,7 +425,8 @@ The directory has to stay fast on ~300k employees / ~2.8M salary rows:
   is streamed in chunks and XLSX written row by row; PDFs above 1,000 rows and CSV / XLSX
   above 20,000 rows are generated by the queue worker.
 - **Employee number search**: a numeric search term is a primary-key lookup, not a name scan.
-- **Caching**: 15-minute cache for dashboard statistics, 30-minute cache for department data.
+- **Caching**: 15-minute cache for dashboard statistics, 30-minute cache for department data;
+  department figures and reports are precomputed (below).
 
 Typical timings on the full dataset (Docker, warm-ish cache): unfiltered list ~0.1 s,
 single filters and sorts 0.1–0.6 s, combined filters up to ~2 s, full CSV export of all
@@ -503,6 +510,13 @@ It has to report no advisories. Update policy:
 
 ### Protections in the application
 
+- Every route requires a signed-in, active user and checks its Gate or policy on the server,
+  and so do Livewire actions and API routes ([docs/AUTHORIZATION.md](docs/AUTHORIZATION.md)).
+- SQL uses bindings or whitelisted values only; Blade output is escaped, forms carry CSRF tokens;
+  CSV cells cannot start a formula.
+- Login, export, import, reports and the API are rate limited. API tokens act as their owner
+  and are revoked with a password or role change.
+- Every change of data, and every export, is in the audit log.
 - `App\Http\Middleware\SecurityHeaders` sets the security headers on every response. Its
   Content-Security-Policy allows inline scripts and `eval` (inline `onclick` handlers, Livewire's
   Alpine), so it does not stop an inline script; it limits where pages load from and send data
@@ -526,6 +540,7 @@ The application provides the following main routes:
 - `GET /departments`, `GET /departments/{dept_no}` - Departments index and page (managers: own department only)
 - `GET /departments/create`, `POST /departments`, `GET /departments/{dept_no}/edit`, `PUT|DELETE /departments/{dept_no}` - Create, rename, delete (`manage-departments`)
 - `GET /departments/{dept_no}/manager-candidates?q=` (60 requests per minute), `POST /departments/{dept_no}/managers`, `POST /departments/{dept_no}/managers/end` - Department managers (`manage-departments`)
+- `GET /reports`, `GET /reports/workforce`, `GET /reports/compensation`, `GET /reports/{report}/csv` - Reports (`view-reports`; compensation also `view-salaries`)
 - `GET /account`, `PUT /account/profile`, `PUT /account/password` - My account
 - `GET /employees/create`, `POST /employees` - Hire an employee (`manage-employees`)
 - `PUT /employees/{emp_no}`, `POST /employees/{emp_no}/transfer|title|salary|terminate|rehire|undo`,
@@ -538,13 +553,12 @@ The application provides the following main routes:
 ## Configuration
 
 ### Cache Configuration
-Adjust cache settings in `config/cache.php` for production environments.
+The web server, the queue worker and the scheduler must share one cache store that supports
+locks (`CACHE_DRIVER`; Docker: `file` on the shared `cache-data` volume).
 
 ### PDF Settings
 PDF generation options live in `config/dompdf.php`. Remote files, PHP and JavaScript are disabled there; exports must not replace them with `setOptions()` (a single `setOption()` is fine).
 
-### Database Optimization
-For large datasets, consider:
-- Database connection pooling
-- Read replicas for reporting queries
-- Partitioning for historical data
+### Database
+Give InnoDB a buffer pool that holds the dataset (`innodb_buffer_pool_size`, 1 GB in Docker,
+`DB_BUFFER_POOL_SIZE`): the default of 128 MB is much smaller than the tables.

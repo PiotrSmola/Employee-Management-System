@@ -134,12 +134,14 @@ Signature: `AuditLogger::log(string $action, string $subjectType, string|int|nul
   `employee.title_changed`, `employee.salary_changed`, `employee.terminated`,
   `employee.rehired`, `employee.salary_corrected`, `employee.title_corrected`,
   `employee.change_undone` (payloads in [HR_OPERATIONS.md](HR_OPERATIONS.md); their `_undo`
-  key is internal data of the undo, keys starting with `_` are never displayed). Existing ones: `user.created`,
-  `user.updated`, `user.role_changed`, `user.password_reset`, `user.password_changed`,
-  `user.deleted`, `auth.login`, `auth.login_failed` (`changes`: `email`, `reason`),
-  `data.api_token_created`, `data.api_token_revoked` (subject `user`), `data.exported` (subject
-  `export`, id of a queued export or null), `data.export_downloaded`, `data.imported` (subject
-  `import`, `changes`: `count`, `file`, `first_emp_no`, `last_emp_no`, `departments`).
+  key is internal data of the undo, keys starting with `_` are never displayed). Departments:
+  `department.created`, `department.renamed`, `department.deleted`,
+  `department.manager_assigned`, `department.manager_ended`, `department.manager_restored`.
+  Existing ones: `user.created`, `user.updated`, `user.role_changed`, `user.password_reset`,
+  `user.password_changed`, `user.deleted`, `auth.login`, `auth.login_failed` (`changes`: `email`,
+  `reason`), `data.api_token_created`, `data.api_token_revoked` (subject `user`), `data.exported`
+  (subject `export`, id of a queued export or null), `data.export_downloaded`, `data.imported`
+  (subject `import`, `changes`: `count`, `file`, `first_emp_no`, `last_emp_no`, `departments`).
 - `subjectType` is a short alias (`ActivityLog::SUBJECT_EMPLOYEE|DEPARTMENT|USER|EXPORT|IMPORT`; add a
   constant for a new one), `subjectId` the emp_no / dept_no / user id (stored as a string).
 - The acting user defaults to the signed-in user (pass it explicitly in queued jobs), the IP to
@@ -157,7 +159,7 @@ Signature: `AuditLogger::log(string $action, string $subjectType, string|int|nul
 - The audit log screen (`/audit-log`, route `audit-log.index`) is behind `Ability::VIEW_AUDIT_LOG`.
   It renders any `changes` payload (`App\Support\AuditLogPresenter`): `before`/`after` pairs
   as *before → after*, other keys as values, `dept_no` with the department name. Departments link to
-  `route('departments.show', $dept_no)` as soon as that route exists.
+  `route('departments.show', $dept_no)`.
 
 ## Reading the history tables: `App\Support\HistoryRows`
 
@@ -191,9 +193,13 @@ Hire, transfer, title / salary changes, termination and rehire go through this s
 keeps the history shape, locks the employee, audits and flushes the cache). `dept_emp` and
 `dept_manager` have `from_date` in the primary key: an employee can have several periods in one
 department - pick the current one by `to_date = 9999-01-01` and the last one by
-the latest `to_date`, never by `(emp_no, dept_no)` alone. Code that inserts
-employees itself (e.g. an import) takes the number from `EmployeeNumberAllocator::next()`
-inside its transaction. See [HR_OPERATIONS.md](HR_OPERATIONS.md).
+the latest `to_date`, never by `(emp_no, dept_no)` alone. See
+[HR_OPERATIONS.md](HR_OPERATIONS.md).
+
+Code that creates employees runs `$numbers->transaction(...)` of
+`App\Services\EmployeeNumberAllocator` and takes the numbers from `$numbers->next()` inside it,
+as the hire and the import do: `next()` locks the highest number, and the transaction is
+repeated up to five times after a duplicate number, a deadlock or a lock wait timeout.
 
 ## Cached figures: `App\Support\EmployeeDataCache`
 
@@ -206,7 +212,7 @@ EmployeeDataCache::flush();                     // everything
 EmployeeDataCache::flush(['d001', 'd005']);     // company-wide keys + only these departments (e.g. a transfer)
 ```
 
-Keys: `dashboard_stats`, `employees_by_department`, `dashboard_stats:dept:<no>`,
+Keys: `dashboard_stats`, `employees_by_department`, `job_titles`, `dashboard_stats:dept:<no>`,
 `employees_by_title:dept:<no>`, `job_titles:dept:<no>` (`-` = manager without a department).
 New cached figures derived from employee data get a key method there and are added to
 `EmployeeDataCache::keys()`, so `flush()` keeps clearing everything. Figures that hold department
@@ -214,9 +220,9 @@ names are also cleared in `EmployeeDataCache::flushDepartmentNames()`, which run
 
 ### Figures that are expensive to compute: `App\Support\FigureCache`
 
-The department figures take far longer to compute than a request should wait, so they use
-`FigureCache` instead of `Cache::remember()`: `departments_overview` and
-`department_details:dept:<no>`.
+Department figures and reports take far longer to compute than a request should wait, so they
+use `FigureCache` instead of `Cache::remember()`: `departments_overview`,
+`department_details:dept:<no>` and the report figures.
 
 ```php
 ['value' => $figures, 'status' => $status] = FigureCache::read($key, $ttl, $compute, $refreshLater);
@@ -224,18 +230,29 @@ FigureCache::invalidate($key);
 FigureCache::refresh($key, $ttl, $compute);
 ```
 
-- `status` is `FRESH`; `STALE`, the last good value, with `$refreshLater` called to dispatch a
+- `status` is `FRESH`; `STALE`, the last good value, with `$refreshLater` called to request a
   refresh after the response; or `PREPARING`, value null: nothing cached yet and another process
-  is computing it. A reader waits two seconds for that process, then the page says so and reloads.
+  is computing it. A reader waits two seconds for that process, then the page says so and reloads
+  (reports: `ReportsBusyException`, a 503 with `Retry-After`).
 - One compute per key at a time (`Cache::lock`, so the cache store must support locks).
-- `invalidate()` changes the generation in the key: a compute already running cannot make the
-  value fresh again. The stale copy stays for a week.
-- `php artisan departments:warm` recomputes all of them, hourly in `routes/console.php`. That
-  needs the scheduler (`php artisan schedule:run` every minute); without it readers still get
-  the stale copy and the refresh runs after their response.
+- A key has one entry, fresh or stale, replaced by every compute, so changes leave no retired
+  files in the file cache. The entry remembers its generation: `invalidate()` changes the
+  generation, and a compute already running cannot make the value fresh again. The optional
+  `$version` is what else the value depends on (reports: all reports' version and the day). The
+  stale copy stays for a week.
+- `$refreshLater` uses `App\Support\AfterResponse::artisan($command, $parameters)`. mod_php and
+  the built-in server keep the connection open until the script ends, and the browser
+  would wait for the refresh (no `DOMContentLoaded`), so there it starts a process of its own.
+- `php artisan departments:warm` recomputes all of them (`--only=overview`, `--only=d005`,
+  `--expired`), hourly in `routes/console.php`. That needs the scheduler (Docker: the `scheduler`
+  service, otherwise `php artisan schedule:work`); without it readers still get the stale copy
+  and the refresh runs after their response.
+- All processes need the same cache (Docker: the shared `cache-data` volume), otherwise the
+  scheduler warms a cache nobody reads.
 - A full `EmployeeDataCache::flush()` invalidates the overview and every department;
   `flush(['d005'])` only those departments. The overview covers all departments and expires
-  after 15 minutes, so it is not recomputed for each change of one employee.
+  after 15 minutes, so it is not recomputed for each change of one employee. An undo does a full
+  flush: it removes rows that any figure may contain.
 - Cached payloads are shared between users: apply salary and scope rules when reading, as
   `DepartmentStatistics` does, never before caching.
 
@@ -248,13 +265,14 @@ FigureCache::refresh($key, $ttl, $compute);
   the department figures cached.
 - The current manager has `to_date = 9999-01-01`. A change of manager on day D ends the old
   period on D and starts the new one on D; a new period never starts before the department's
-  last ended period. Rows are picked by their dates, not by `(emp_no, dept_no)`. While that pair is
-  `dept_manager`'s primary key, a former manager cannot manage the same department again; the
-  rule is in `DepartmentManagementService::reappointmentBlockingPeriod()` (return null once the key
-  includes `from_date`).
-- Code that moves a current department manager out of the department or terminates them
-  should end the management too: `endManagement($department, $date)` (the date must be after
-  the period's start).
+  last ended period. Rows are picked by their dates, not by `(emp_no, dept_no)`: a former manager
+  can manage the same department again, in a new period.
+- A management ends in one place, `DepartmentManagementService::endPeriods($periods, $date, $cause)`:
+  the department page, a transfer, a termination and a rehire (stray rows) all use it, and each
+  writes `department.manager_ended` (`emp_no`, `from_date`, `to_date`, for an HR operation also
+  `cause`, the action). Pass the locked current rows; the caller checks the date. An undo that
+  reopens such a period writes `department.manager_restored`, and is refused once another
+  manager took over.
 - Read-only figures: `App\Services\DepartmentStatistics` (`overview()`, `details()`,
   `currentManagers()`, `managerHistory()`, `forEmployee()`). `overview()` and `details()` take an
   `EmployeeVisibility`: salary figures only with `view-salaries`, and employees outside a scoped
@@ -265,15 +283,18 @@ FigureCache::refresh($key, $ttl, $compute);
 - The directory accepts an initial department: `route('employees.index', ['department' => 'd005'])`
   (the manager scope still wins).
 
-Reports (`App\Reports`) are cached per figure, department scope and as-of date under a
-versioned namespace instead of single keys: `reports:<version>:<figure>:<scope>:<as-of>`
-(`EmployeeDataCache::report()`, built by `App\Reports\ReportCache::key()`; scope `all`,
-`dept-<no>` or `mgr-<no>`, as-of `current-<today>` or `Y-m-d`). `flush()` forgets
-`reports:version` (it is part of `keys()`), which retires every cached report at once;
-`EmployeeDataCache::flushReports()` does only that. Writers therefore need nothing extra.
+Reports (`App\Reports`) are cached in `FigureCache` per figure, department scope and as-of date:
+`reports:<figure>:<scope>:<as-of>` (`EmployeeDataCache::report()`, built by
+`App\Reports\ReportCache::key()`; scope `all`, `dept-<no>` or `mgr-<no>`, as-of `current` or
+`Y-m-d`). A figure is fresh for 24 hours, for one `reports:version` and, for `current`, for one
+day. `flush()` forgets `reports:version` (it is part of `keys()`), which retires every cached
+report at once while their last good copies stay available;
+`EmployeeDataCache::flushReports()` does only that. Writers therefore need nothing extra, and
+neither a write nor midnight leaves the next visitor with a cold report.
 `php artisan reports:warm` (scheduled hourly in `routes/console.php`) recomputes the current
 state of the company, of every department and of every manager scope after a flush; options
-`--as-of=Y-m-d`, `--department=d005` (repeatable), `--fresh` (recompute cached figures too).
+`--as-of=Y-m-d`, `--department=d005` (repeatable), `--scope=all|dept-d005|mgr-d005`, `--fresh`
+(recompute fresh figures too).
 Report code reads `dept_emp`, `titles` and `salaries` only through `App\Reports\ReportSources`,
 so a condition for all history rows belongs in `ReportSources::rowFilter()`.
 
