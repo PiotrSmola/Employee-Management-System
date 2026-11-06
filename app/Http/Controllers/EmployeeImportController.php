@@ -13,6 +13,7 @@ use OpenSpout\Common\Entity\Style\Style;
 use OpenSpout\Writer\XLSX\Writer as XlsxWriter;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use Throwable;
 
 /**
  * Import of new employees: upload -> validation preview -> confirm
@@ -41,11 +42,18 @@ class EmployeeImportController extends Controller
 
         if ($format === 'xlsx') {
             $path = tempnam(sys_get_temp_dir(), 'tpl');
-            $writer = new XlsxWriter;
-            $writer->openToFile($path);
-            $writer->addRow(Row::fromValuesWithStyle($header, (new Style)->withFontBold(true)));
-            $writer->addRow(Row::fromValues($example));
-            $writer->close();
+
+            try {
+                $writer = new XlsxWriter;
+                $writer->openToFile($path);
+                $writer->addRow(Row::fromValuesWithStyle($header, (new Style)->withFontBold(true)));
+                $writer->addRow(Row::fromValues($example));
+                $writer->close();
+            } catch (Throwable $e) {
+                @unlink($path);
+
+                throw $e;
+            }
 
             return response()->download($path, 'employees_import_template.xlsx', [
                 'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

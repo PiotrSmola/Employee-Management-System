@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Support\EmployeeDataCache;
 use DateTimeImmutable;
 use DateTimeInterface;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -19,6 +20,7 @@ use OpenSpout\Reader\ReaderInterface;
 use OpenSpout\Reader\XLSX\Options as XlsxOptions;
 use OpenSpout\Reader\XLSX\Reader as XlsxReader;
 use Throwable;
+use ZipArchive;
 
 /**
  * Import of new employees from a CSV or XLSX file in two steps:
@@ -85,14 +87,33 @@ class EmployeeImportService
      */
     public function analyze(UploadedFile $file): array
     {
-        $extension = strtolower($file->getClientOriginalExtension());
+        $type = strtolower($file->getClientOriginalExtension()) === 'xlsx' ? 'xlsx' : 'csv';
+        $path = $file->getRealPath();
+        $converted = null;
 
         try {
-            [$header, $rows] = $this->read($file->getRealPath(), $extension === 'xlsx' ? 'xlsx' : 'csv');
+            if ($type === 'xlsx' && $this->unpackedSize($path) > (int) config('data_tools.imports.max_unpacked_kb', 102400) * 1024) {
+                return $this->result([__('The file is too large when unpacked. Split it into several files.')], []);
+            }
+
+            $converted = $type === 'csv' ? $this->utf8Copy($path) : null;
+            [$header, $rows, $tooManyRows] = $this->read($converted ?? $path, $type);
+        } catch (ImportException $e) {
+            return $this->result([$e->getMessage()], []);
         } catch (Throwable $e) {
             report($e);
 
             return $this->result([__('The file could not be read. Please upload a CSV or XLSX file based on the template.')], []);
+        } finally {
+            if ($converted !== null) {
+                @unlink($converted);
+            }
+        }
+
+        if ($tooManyRows) {
+            return $this->result([__('The file has more than :max rows. Split it into several files.', [
+                'max' => number_format((int) config('data_tools.imports.max_rows', 5000)),
+            ])], []);
         }
 
         if ($header === null) {
@@ -104,11 +125,6 @@ class EmployeeImportService
 
         if ($missing !== []) {
             return $this->result([__('Missing columns: :columns. Use the template.', ['columns' => implode(', ', $missing)])], []);
-        }
-
-        $maxRows = (int) config('data_tools.imports.max_rows', 5000);
-        if (count($rows) > $maxRows) {
-            return $this->result([__('The file has more than :max rows. Split it into several files.', ['max' => number_format($maxRows)])], []);
         }
 
         if ($rows === []) {
@@ -128,7 +144,11 @@ class EmployeeImportService
     }
 
     /**
-     * @return array{0: array<int, mixed>|null, 1: array<int, array<int, mixed>>} header cells, data rows keyed by line number
+     * Reading stops as soon as a file has more rows than allowed, blank ones included
+     * (spreadsheets can declare a million empty rows). Cells are limited in length and
+     * number, so a hostile file cannot fill the memory or the staged import.
+     *
+     * @return array{0: array<int, mixed>|null, 1: array<int, array<int, mixed>>, 2: bool} header cells, data rows keyed by line number, too many rows?
      */
     private function read(string $path, string $type): array
     {
@@ -136,40 +156,99 @@ class EmployeeImportService
             ? new XlsxReader(new XlsxOptions(SHOULD_PRESERVE_EMPTY_ROWS: true))
             : new CsvReader(new CsvOptions(SHOULD_PRESERVE_EMPTY_ROWS: true, FIELD_DELIMITER: $this->csvDelimiter($path)));
 
-        $maxRows = (int) config('data_tools.imports.max_rows', 5000);
+        $maxLines = (int) config('data_tools.imports.max_rows', 5000) + 1; // the header row
+        $maxColumns = (int) config('data_tools.imports.max_columns', 50);
+        $lines = 0;
+        $tooManyRows = false;
         $header = null;
         $rows = [];
 
         $reader->open($path);
         try {
             foreach ($this->firstSheetRows($reader) as $line => $row) {
-                $cells = array_map(fn ($cell) => $cell->getValue(), $row->cells);
-
-                if ($header === null) {
-                    if ($this->isBlank($cells)) {
-                        continue;
-                    }
-                    $header = $cells;
-
-                    continue;
+                if (++$lines > $maxLines) {
+                    $tooManyRows = true;
+                    break;
                 }
+
+                $cells = array_map(fn ($cell) => $this->cellValue($cell->getValue()), array_slice($row->cells, 0, $maxColumns, true));
 
                 if ($this->isBlank($cells)) {
                     continue;
                 }
 
-                $rows[$line] = $cells;
-
-                // One more than allowed is enough to report the limit.
-                if (count($rows) > $maxRows) {
-                    break;
+                if ($header === null) {
+                    $header = $cells;
+                } else {
+                    $rows[$line] = $cells;
                 }
             }
         } finally {
             $reader->close();
         }
 
-        return [$header, $rows];
+        return [$header, $rows, $tooManyRows];
+    }
+
+    /**
+     * Strings are cut off at the maximum cell length, anything but plain values and dates is dropped.
+     */
+    private function cellValue(mixed $value): mixed
+    {
+        if (is_string($value)) {
+            return mb_substr($value, 0, (int) config('data_tools.imports.max_cell_length', 200));
+        }
+
+        return is_scalar($value) || $value instanceof DateTimeInterface ? $value : null;
+    }
+
+    /**
+     * Total unpacked size of an XLSX file (a zip archive), from its directory, without unpacking.
+     * Something that is no zip archive counts as 0: the reader reports it as unreadable.
+     */
+    private function unpackedSize(string $path): int
+    {
+        $zip = new ZipArchive;
+
+        if ($zip->open($path, ZipArchive::RDONLY) !== true) {
+            return 0;
+        }
+
+        $size = 0;
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $size += (int) ($zip->statIndex($i)['size'] ?? 0);
+        }
+        $zip->close();
+
+        return $size;
+    }
+
+    /**
+     * A UTF-8 copy of a CSV file in another encoding, or null when it already is UTF-8: UTF-16
+     * with a byte order mark ("Unicode text" in Excel), otherwise Windows-1250 (the "CSV" of a
+     * Polish Excel). The caller deletes the copy.
+     *
+     * @throws ImportException when the file cannot be converted
+     */
+    private function utf8Copy(string $path): ?string
+    {
+        $content = (string) file_get_contents($path);
+        $isUtf16 = str_starts_with($content, "\xFF\xFE") || str_starts_with($content, "\xFE\xFF");
+
+        if (! $isUtf16 && mb_check_encoding($content, 'UTF-8')) {
+            return null;
+        }
+
+        $converted = @iconv($isUtf16 ? 'UTF-16' : 'WINDOWS-1250', 'UTF-8', $content);
+
+        if ($converted === false) {
+            throw new ImportException(__('The encoding of the file was not recognized. Save it as CSV UTF-8 or XLSX.'));
+        }
+
+        $copy = (string) tempnam(sys_get_temp_dir(), 'import');
+        file_put_contents($copy, $converted);
+
+        return $copy;
     }
 
     /**
@@ -208,7 +287,8 @@ class EmployeeImportService
     {
         $map = [];
         foreach ($header as $index => $name) {
-            $key = Str::snake(trim(preg_replace('/^\xEF\xBB\xBF/', '', (string) $name)));
+            $name = is_scalar($name) ? (string) $name : '';
+            $key = Str::snake(trim(preg_replace('/^\xEF\xBB\xBF/', '', $name)));
             $key = str_replace(['-', ' '], '_', strtolower($key));
             $key = self::ALIASES[$key] ?? $key;
 
@@ -438,16 +518,25 @@ class EmployeeImportService
 
     /**
      * Keep an analysis for its user until it is confirmed or cancelled; returns the token.
+     * A user has one staged import: a new upload replaces the previous one.
      */
     public function stage(User $user, string $fileName, array $analysis): string
     {
         $token = (string) Str::uuid();
+        $expires = now()->addMinutes((int) config('data_tools.imports.preview_ttl', 60));
+        $userKey = self::CACHE_PREFIX.'user:'.$user->getKey();
+
+        $previous = Cache::get($userKey);
+        if (is_string($previous)) {
+            $this->forget($previous);
+        }
 
         Cache::put(self::CACHE_PREFIX.$token, [
             'user_id' => $user->getKey(),
             'file_name' => mb_substr($fileName, 0, 255),
             'analysis' => $analysis,
-        ], now()->addMinutes((int) config('data_tools.imports.preview_ttl', 60)));
+        ], $expires);
+        Cache::put($userKey, $token, $expires);
 
         return $token;
     }
@@ -493,53 +582,66 @@ class EmployeeImportService
             throw new ImportException(__('The file has errors. Correct them and upload it again.'));
         }
 
-        $result = DB::transaction(function () use ($analysis, $staged, $user) {
-            $next = $this->allocateEmployeeNumbers();
+        try {
+            $result = DB::transaction(fn () => $this->createEmployees($analysis, $staged['file_name'], $user));
+        } catch (QueryException $e) {
+            // Details go to the log only. The upload stays staged, so the user can try again.
+            report($e);
 
-            // Re-check after taking the lock: concurrent imports are visible now.
-            $rows = $this->validate(array_map(fn ($row) => ['line' => $row['line'], 'values' => $row['values']], $analysis['rows']));
-            foreach ($rows as $row) {
-                if ($row['errors'] !== []) {
-                    throw new ImportException(__('Row :line is no longer valid: :error Please upload the file again.', [
-                        'line' => $row['line'], 'error' => $row['errors'][0],
-                    ]));
-                }
-            }
-
-            $employees = $deptEmp = $titles = $salaries = [];
-            $empNo = $next;
-            foreach ($rows as $row) {
-                $v = $row['values'];
-                $employees[] = [
-                    'emp_no' => $empNo, 'birth_date' => $v['birth_date'], 'first_name' => $v['first_name'],
-                    'last_name' => $v['last_name'], 'gender' => $v['gender'], 'hire_date' => $v['hire_date'],
-                ];
-                $deptEmp[] = ['emp_no' => $empNo, 'dept_no' => $v['department'], 'from_date' => $v['hire_date'], 'to_date' => self::CURRENT];
-                $titles[] = ['emp_no' => $empNo, 'title' => $v['title'], 'from_date' => $v['hire_date'], 'to_date' => self::CURRENT];
-                $salaries[] = ['emp_no' => $empNo, 'salary' => $v['salary'], 'from_date' => $v['hire_date'], 'to_date' => self::CURRENT];
-                $empNo++;
-            }
-
-            foreach (['employees' => $employees, 'dept_emp' => $deptEmp, 'titles' => $titles, 'salaries' => $salaries] as $table => $data) {
-                foreach (array_chunk($data, self::INSERT_CHUNK) as $chunk) {
-                    DB::table($table)->insert($chunk);
-                }
-            }
-
-            $result = ['count' => count($employees), 'first_emp_no' => $next, 'last_emp_no' => $empNo - 1];
-
-            AuditLogger::log('data.imported', ActivityLog::SUBJECT_IMPORT, null, $result + [
-                'file' => $staged['file_name'],
-                'departments' => array_values(array_unique(array_column($deptEmp, 'dept_no'))),
-            ], $user);
-
-            return $result + ['departments' => array_values(array_unique(array_column($deptEmp, 'dept_no')))];
-        });
+            throw new ImportException(__('The employees could not be saved, nothing was imported. Please try again.'));
+        }
 
         $this->forget($token);
         EmployeeDataCache::flush($result['departments']);
 
         return ['count' => $result['count'], 'first_emp_no' => $result['first_emp_no'], 'last_emp_no' => $result['last_emp_no']];
+    }
+
+    /**
+     * @return array{count: int, first_emp_no: int, last_emp_no: int, departments: string[]}
+     */
+    private function createEmployees(array $analysis, string $fileName, User $user): array
+    {
+        $next = $this->allocateEmployeeNumbers();
+
+        // Re-check after taking the lock: concurrent imports are visible now.
+        $rows = $this->validate(array_map(fn ($row) => ['line' => $row['line'], 'values' => $row['values']], $analysis['rows']));
+        foreach ($rows as $row) {
+            if ($row['errors'] !== []) {
+                throw new ImportException(__('Row :line is no longer valid: :error Please upload the file again.', [
+                    'line' => $row['line'], 'error' => $row['errors'][0],
+                ]));
+            }
+        }
+
+        $employees = $deptEmp = $titles = $salaries = [];
+        $empNo = $next;
+        foreach ($rows as $row) {
+            $v = $row['values'];
+            $employees[] = [
+                'emp_no' => $empNo, 'birth_date' => $v['birth_date'], 'first_name' => $v['first_name'],
+                'last_name' => $v['last_name'], 'gender' => $v['gender'], 'hire_date' => $v['hire_date'],
+            ];
+            $deptEmp[] = ['emp_no' => $empNo, 'dept_no' => $v['department'], 'from_date' => $v['hire_date'], 'to_date' => self::CURRENT];
+            $titles[] = ['emp_no' => $empNo, 'title' => $v['title'], 'from_date' => $v['hire_date'], 'to_date' => self::CURRENT];
+            $salaries[] = ['emp_no' => $empNo, 'salary' => $v['salary'], 'from_date' => $v['hire_date'], 'to_date' => self::CURRENT];
+            $empNo++;
+        }
+
+        foreach (['employees' => $employees, 'dept_emp' => $deptEmp, 'titles' => $titles, 'salaries' => $salaries] as $table => $data) {
+            foreach (array_chunk($data, self::INSERT_CHUNK) as $chunk) {
+                DB::table($table)->insert($chunk);
+            }
+        }
+
+        $result = ['count' => count($employees), 'first_emp_no' => $next, 'last_emp_no' => $empNo - 1];
+
+        AuditLogger::log('data.imported', ActivityLog::SUBJECT_IMPORT, null, $result + [
+            'file' => $fileName,
+            'departments' => array_values(array_unique(array_column($deptEmp, 'dept_no'))),
+        ], $user);
+
+        return $result + ['departments' => array_values(array_unique(array_column($deptEmp, 'dept_no')))];
     }
 
     /**

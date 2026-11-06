@@ -323,6 +323,83 @@ class EmployeeImportTest extends TestCase
         $this->assertSame(3, $this->staged($token)['valid']);
     }
 
+    public function test_blank_rows_count_towards_the_row_limit(): void
+    {
+        config(['data_tools.imports.max_rows' => 3]);
+
+        [$preview, $token] = $this->upload($this->csv([$this->line(), ...array_fill(0, 10, ',,,,,,,')]));
+
+        $preview->assertSee('The file has more than 3 rows. Split it into several files.');
+        $this->assertSame([], $this->staged($token)['rows']);
+    }
+
+    public function test_long_cells_are_cut_off_and_rejected_by_the_validation(): void
+    {
+        [, $token] = $this->upload($this->csv([$this->line(['first_name' => str_repeat('x', 5000)])]));
+        $row = $this->staged($token)['rows'][0];
+
+        $this->assertSame(200, mb_strlen($row['values']['first_name']));
+        $this->assertSame(['First name may have at most 14 characters.'], $row['errors']);
+    }
+
+    public function test_extra_columns_are_ignored(): void
+    {
+        $extra = implode(',', array_map(fn ($i) => 'x'.$i, range(1, 100)));
+
+        [, $token] = $this->upload($this->csv([$this->line().','.$extra], self::HEADER.','.$extra));
+
+        $this->assertSame(1, $this->staged($token)['valid']);
+    }
+
+    public function test_the_unpacked_size_of_an_xlsx_file_is_limited(): void
+    {
+        config(['data_tools.imports.max_unpacked_kb' => 1]);
+        $path = tempnam(sys_get_temp_dir(), 'imp').'.xlsx';
+        $zip = new \ZipArchive;
+        $zip->open($path, \ZipArchive::CREATE);
+        $zip->addFromString('xl/worksheets/sheet1.xml', str_repeat(' ', 5000));
+        $zip->close();
+
+        [$preview, $token] = $this->upload(new UploadedFile($path, 'bomb.xlsx', null, null, true));
+
+        $preview->assertSee('The file is too large when unpacked. Split it into several files.');
+        $this->assertSame([], $this->staged($token)['rows']);
+    }
+
+    // -------------------------------------------------------------- encoding
+
+    public function test_a_windows_1250_csv_from_a_polish_excel(): void
+    {
+        $line = implode(';', ['Łukasz', 'Żółć', '1991-02-03', 'M', '2025-03-01', $this->mid->dept_no, 'Staff', '55000']);
+        $content = iconv('UTF-8', 'WINDOWS-1250', str_replace(',', ';', self::HEADER)."\r\n".$line."\r\n");
+        $this->assertFalse(mb_check_encoding($content, 'UTF-8'), 'the test file really is not UTF-8');
+
+        [, $token] = $this->upload(UploadedFile::fake()->createWithContent('polish.csv', $content));
+        $row = $this->staged($token)['rows'][0];
+
+        $this->assertSame([], $row['errors']);
+        $this->assertSame(['Łukasz', 'Żółć'], [$row['values']['first_name'], $row['values']['last_name']]);
+
+        $this->post(route('employees.import.commit', $token))->assertSessionHas('status');
+        $this->assertDatabaseHas('employees', ['first_name' => 'Łukasz', 'last_name' => 'Żółć']);
+    }
+
+    public function test_a_utf_16_csv_with_a_byte_order_mark(): void
+    {
+        $content = "\xFF\xFE".iconv('UTF-8', 'UTF-16LE', self::HEADER."\n".$this->line(['first_name' => 'Łucja'])."\n");
+
+        [, $token] = $this->upload(UploadedFile::fake()->createWithContent('unicode.csv', $content));
+
+        $this->assertSame('Łucja', $this->staged($token)['rows'][0]['values']['first_name']);
+    }
+
+    public function test_utf_8_files_are_left_alone(): void
+    {
+        [, $token] = $this->upload($this->csv([$this->line(['first_name' => 'Łucja'])]));
+
+        $this->assertSame('Łucja', $this->staged($token)['rows'][0]['values']['first_name']);
+    }
+
     public function test_the_file_size_and_type_limits(): void
     {
         config(['data_tools.imports.max_file_kb' => 1]);
@@ -356,6 +433,47 @@ class EmployeeImportTest extends TestCase
 
         $this->assertSame(1, Employee::where('first_name', 'Jane')->count());
         $this->assertSame(0, ActivityLog::where('action', 'data.imported')->count());
+    }
+
+    public function test_a_database_error_is_reported_rolls_everything_back_and_keeps_the_upload(): void
+    {
+        [, $token] = $this->upload($this->csv([$this->line(), $this->line(['first_name' => 'Joan'])]));
+
+        // The rows pass the validation, the dept_emp insert then fails on its foreign key
+        // after the employees were inserted.
+        $this->app->instance(EmployeeImportService::class, new class extends EmployeeImportService
+        {
+            public function validate(array $records): array
+            {
+                return array_map(function ($row) {
+                    $row['values']['department'] = 'zzzz';
+
+                    return $row;
+                }, parent::validate($records));
+            }
+        });
+
+        $this->post(route('employees.import.commit', $token))
+            ->assertRedirect(route('employees.import.preview', $token))
+            ->assertSessionHas('error', 'The employees could not be saved, nothing was imported. Please try again.');
+
+        $this->assertSame(7, Employee::count(), 'the employees insert is rolled back');
+        $this->assertSame(0, ActivityLog::where('action', 'data.imported')->count());
+        $this->assertNotNull(app(EmployeeImportService::class)->staged($this->user, $token), 'the upload stays staged');
+    }
+
+    public function test_a_new_upload_replaces_the_staged_one(): void
+    {
+        [, $first] = $this->upload($this->csv([$this->line()]));
+        [, $second] = $this->upload($this->csv([$this->line(['first_name' => 'Joan'])]));
+
+        $this->get(route('employees.import.preview', $first))->assertNotFound();
+        $this->get(route('employees.import.preview', $second))->assertOk();
+
+        $this->signInAs(Role::Hr);
+        [, $other] = $this->upload($this->csv([$this->line()]));
+        $this->assertNotNull(app(EmployeeImportService::class)->staged($this->user, $other));
+        $this->assertNull(app(EmployeeImportService::class)->staged($this->user, $second), 'not this user\'s');
     }
 
     public function test_other_users_and_expired_tokens_are_not_found(): void
