@@ -40,6 +40,7 @@ order. Add a file instead of editing `navbar.blade.php`. Existing slots:
 | `main/20-employees` | All Employees, Export Data |
 | `main/90-users` | Users (admins) |
 | `user/10-account` | My account |
+| `user/60-audit-log` | Audit log (admins, HR) |
 | `user/90-users` | Users (admins) |
 
 Suggested numbers: departments `30`, reports `40`, data tools `50`, audit log `60`
@@ -122,7 +123,11 @@ Signature: `AuditLogger::log(string $action, string $subjectType, string|int|nul
 
 - `action` is `<subject>.<verb>` in snake case: `employee.hired`, `employee.transferred`,
   `employee.promoted`, `employee.salary_changed`, `employee.terminated`, `department.created`,
-  `department.manager_assigned`, `data.imported`, ... Existing ones: `user.created`,
+  `department.manager_assigned`, `data.imported`, ... HR operations write `employee.hired`,
+  `employee.updated`, `employee.transferred`, `employee.promoted`, `employee.demoted`,
+  `employee.title_changed`, `employee.salary_changed`, `employee.terminated`,
+  `employee.rehired`, `employee.salary_corrected`, `employee.title_corrected` (payloads in
+  [HR_OPERATIONS.md](HR_OPERATIONS.md)). Existing ones: `user.created`,
   `user.updated`, `user.role_changed`, `user.password_reset`, `user.password_changed`,
   `user.deleted`, `auth.login`, `auth.login_failed` (`changes`: `email`, `reason`).
 - `subjectType` is a short alias (`ActivityLog::SUBJECT_EMPLOYEE|DEPARTMENT|USER`; add a
@@ -137,7 +142,17 @@ Signature: `AuditLogger::log(string $action, string $subjectType, string|int|nul
 - Reading: `ActivityLog::forSubject('employee', 10001)->latestFirst()->paginate()`, relation
   `user` (null when the account was deleted). Indexes: `created_at`,
   `(subject_type, subject_id, created_at)`, `(action, created_at)`. Entries are never updated.
-- The audit log screen is behind `Ability::VIEW_AUDIT_LOG`.
+- The audit log screen (`/audit-log`, route `audit-log.index`) is behind `Ability::VIEW_AUDIT_LOG`.
+  It renders any `changes` payload (`App\Support\AuditLogPresenter`): `before`/`after` pairs
+  as *before → after*, other keys as values, `dept_no` with the department name. Departments link to
+  `route('departments.show', $dept_no)` as soon as that route exists.
+
+## Changing employees: `App\Services\EmployeeOperationsService`
+
+Hire, transfer, title / salary changes, termination and rehire go through this service (it
+keeps the history shape, locks the employee, audits and flushes the cache). Code that inserts
+employees itself (e.g. an import) takes the number from `EmployeeNumberAllocator::next()`
+inside its transaction. See [HR_OPERATIONS.md](HR_OPERATIONS.md).
 
 ## Cached figures: `App\Support\EmployeeDataCache`
 
