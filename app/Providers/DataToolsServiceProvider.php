@@ -6,7 +6,7 @@ use App\Http\Api\ApiErrorRenderer;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Cache\RateLimiter;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Throwable;
@@ -20,8 +20,10 @@ class DataToolsServiceProvider extends ServiceProvider
     public function boot(): void
     {
         // `throttle:api`: per token owner (all tokens of a user share the limit), per IP before authentication.
-        RateLimiter::for('api', fn (Request $request) => Limit::perMinute((int) config('data_tools.api.rate_limit', 60))
-            ->by($request->user() ? 'user:'.$request->user()->getKey() : 'ip:'.$request->ip()));
+        // Registered when the limiter is first used: resolving it here would bind it to the cache store
+        // configured at boot time (the test suite switches the store after booting).
+        $this->callAfterResolving(RateLimiter::class, fn (RateLimiter $limiter) => $limiter->for('api', fn (Request $request) => Limit::perMinute((int) config('data_tools.api.rate_limit', 60))
+            ->by($request->user() ? 'user:'.$request->user()->getKey() : 'ip:'.$request->ip())));
 
         $this->callAfterResolving(ExceptionHandler::class, function ($handler) {
             if (method_exists($handler, 'renderable')) {
