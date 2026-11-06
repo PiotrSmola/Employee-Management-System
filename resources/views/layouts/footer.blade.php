@@ -7,7 +7,6 @@
             <a href="mailto:industry@example.com" class="text-decoration-none text-white">
                 <i class="bi bi-envelope-fill" style="font-size: 20px;"></i> industry@example.com
             </a>
-            <p>Ideo Sp. z o.o.</p>
         </div>
     </div>
 </footer>
