@@ -342,7 +342,7 @@ The application provides the following main routes:
 Adjust cache settings in `config/cache.php` for production environments.
 
 ### PDF Settings
-Configure PDF generation options in the DomPDF service provider.
+PDF generation options live in `config/dompdf.php`. Remote files, PHP and JavaScript are disabled there; exports must not replace them with `setOptions()` (a single `setOption()` is fine).
 
 ### Database Optimization
 For large datasets, consider:

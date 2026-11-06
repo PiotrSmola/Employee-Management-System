@@ -27,17 +27,14 @@ return [
         "temp_dir" => sys_get_temp_dir(),
 
         /**
-         * dompdf's "chroot"; limits file access to given directory.
-         */
-        "chroot" => realpath(base_path()),
-
-        /**
-         * Protocol whitelist
+         * No "chroot" here on purpose: dompdf's default (its own package directory)
+         * is enough for the templates, which load no local files. The application
+         * root would put .env within reach.
+         *
+         * Protocol whitelist. dompdf adds the chroot check to file:// by itself.
          */
         "allowed_protocols" => [
             "file://" => ["rules" => []],
-            "http://" => ["rules" => []],
-            "https://" => ["rules" => []]
         ],
 
         /**
@@ -58,7 +55,7 @@ return [
         /**
          * Default font family
          */
-        "default_font" => "serif",
+        "default_font" => "DejaVu Sans",
 
         /**
          * The default paper size.
@@ -78,12 +75,12 @@ return [
         /**
          * Whether to enable Javascript
          */
-        "enable_javascript" => true,
+        "enable_javascript" => false,
 
         /**
          * Whether to enable remote file access
          */
-        "enable_remote" => true,
+        "enable_remote" => false,
 
         /**
          * A ratio applied to the fonts. Set to 1 for
