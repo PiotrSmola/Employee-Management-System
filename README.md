@@ -145,6 +145,7 @@ APP_DEBUG=false
 ADMIN_EMAIL=you@your-company.com
 ADMIN_PASSWORD=<a long, unique password>   # or leave empty and read the generated one from the log
 SEED_DEMO_USERS=false
+SESSION_SECURE_COOKIE=true                 # when served over HTTPS (the session cookie is then HTTPS only)
 ```
 
 Behind a reverse proxy / load balancer configure the trusted proxies
