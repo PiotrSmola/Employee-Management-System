@@ -4,8 +4,10 @@ namespace Tests\Feature\Api;
 
 use App\Enums\Role;
 use App\Models\ActivityLog;
+use App\Models\Export;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\PersonalAccessToken;
 use Tests\Concerns\ActsAsAdmin;
 use Tests\TestCase;
@@ -27,9 +29,140 @@ class ApiTokenManagementTest extends TestCase
             ->assertSee(route('account.tokens.store'));
     }
 
-    public function test_every_role_can_create_a_token_and_sees_it_once(): void
+    public function test_viewers_cannot_create_tokens_and_see_no_section_without_any(): void
     {
-        foreach (Role::cases() as $role) {
+        $viewer = $this->signInAs(Role::Viewer);
+
+        $this->get(route('account.edit'))->assertOk()->assertDontSee('API tokens');
+        $this->post(route('account.tokens.store'), ['token_name' => 'Mine'])->assertForbidden();
+        $this->assertSame(0, $viewer->tokens()->count());
+    }
+
+    public function test_a_viewer_can_still_revoke_an_existing_token(): void
+    {
+        $viewer = $this->signInAs(Role::Viewer);
+        $token = $viewer->createToken('Old');
+
+        $this->get(route('account.edit'))
+            ->assertOk()
+            ->assertSee('Old')
+            ->assertDontSee('Create token');
+
+        $this->delete(route('account.tokens.destroy', $token->accessToken->id))->assertRedirect();
+        $this->assertSame(0, $viewer->tokens()->count());
+    }
+
+    public function test_the_page_showing_a_new_token_is_not_cached(): void
+    {
+        $this->post(route('account.tokens.store'), ['token_name' => 'CI']);
+
+        $response = $this->get(route('account.edit'));
+        $this->assertStringContainsString('no-store', $response->headers->get('Cache-Control'));
+
+        $this->assertStringNotContainsString('no-store', (string) $this->get(route('account.edit'))->headers->get('Cache-Control'));
+    }
+
+    // ---------------------------------------------------------- revocation
+
+    private function tokenOf(User $user): void
+    {
+        $user->createToken('a', ['read']);
+        $user->createToken('b', ['read']);
+    }
+
+    private function assertRevoked(User $user, string $reason): void
+    {
+        $this->assertSame(0, PersonalAccessToken::where('tokenable_id', $user->id)->count());
+
+        $entry = ActivityLog::where('action', 'data.api_token_revoked')->where('subject_id', (string) $user->id)->sole();
+        $this->assertEquals(['count' => 2, 'reason' => $reason], $entry->changes);
+    }
+
+    private function userPayload(User $user, array $overrides = []): array
+    {
+        return $overrides + [
+            'name' => $user->name, 'email' => $user->email, 'role' => $user->role->value, 'is_active' => '1',
+        ];
+    }
+
+    public function test_changing_the_own_password_revokes_the_tokens(): void
+    {
+        $this->tokenOf($this->user);
+
+        $this->put(route('account.password'), [
+            'current_password' => 'password', 'password' => 'new-secret-123', 'password_confirmation' => 'new-secret-123',
+        ])->assertSessionHasNoErrors();
+
+        $this->assertRevoked($this->user, 'password_changed');
+    }
+
+    public function test_an_administrators_password_reset_revokes_the_tokens(): void
+    {
+        $other = User::factory()->hr()->create();
+        $this->tokenOf($other);
+
+        $this->put(route('users.password', $other), ['password' => 'new-secret-123', 'password_confirmation' => 'new-secret-123'])
+            ->assertSessionHasNoErrors();
+
+        $this->assertRevoked($other, 'password_reset');
+    }
+
+    public function test_deactivation_revokes_the_tokens(): void
+    {
+        $other = User::factory()->hr()->create();
+        $this->tokenOf($other);
+
+        $this->put(route('users.update', $other), $this->userPayload($other, ['is_active' => '0']))->assertSessionHasNoErrors();
+
+        $this->assertRevoked($other, 'deactivated');
+    }
+
+    public function test_a_role_change_revokes_the_tokens(): void
+    {
+        $other = User::factory()->hr()->create();
+        $this->tokenOf($other);
+
+        $this->put(route('users.update', $other), $this->userPayload($other, ['role' => 'admin']))->assertSessionHasNoErrors();
+
+        $this->assertRevoked($other, 'role_changed');
+    }
+
+    public function test_other_account_changes_keep_the_tokens(): void
+    {
+        $other = User::factory()->hr()->create();
+        $this->tokenOf($other);
+
+        $this->put(route('users.update', $other), $this->userPayload($other, ['name' => 'New Name']))->assertSessionHasNoErrors();
+
+        $this->assertSame(2, $other->tokens()->count());
+        $this->assertSame(0, ActivityLog::where('action', 'data.api_token_revoked')->count());
+    }
+
+    public function test_deleting_a_user_removes_the_tokens_and_export_files(): void
+    {
+        Storage::fake('local');
+        $other = User::factory()->hr()->create();
+        $this->tokenOf($other);
+        Storage::disk('local')->put('exports/9_x.csv', 'x');
+        Storage::disk('local')->put('exports/mine.csv', 'x');
+        Export::factory()->for($other)->completed('exports/9_x.csv')->create();
+        Export::factory()->for($other)->create();
+        Export::factory()->for($this->user)->completed('exports/mine.csv')->create();
+
+        $this->delete(route('users.destroy', $other))->assertRedirect(route('users.index'));
+
+        $this->assertModelMissing($other);
+        $this->assertRevoked($other, 'user_deleted');
+        $this->assertSame(1, Export::count());
+        Storage::disk('local')->assertMissing('exports/9_x.csv');
+        Storage::disk('local')->assertExists('exports/mine.csv');
+    }
+
+    // ------------------------------------------------------------ creating
+
+    public function test_roles_with_export_data_can_create_a_token_and_see_it_once(): void
+    {
+        foreach ([Role::Admin, Role::Hr, Role::Manager] as $role) {
             $user = $this->signInAs($role, $role === Role::Manager ? 'd001' : null);
 
             $response = $this->post(route('account.tokens.store'), ['token_name' => 'Script '.$role->value, 'expires_in' => '30']);
@@ -106,8 +239,8 @@ class ApiTokenManagementTest extends TestCase
         $id = $this->user->tokens()->sole()->id;
         $this->delete(route('account.tokens.destroy', $id));
 
-        $created = ActivityLog::where('action', 'user.api_token_created')->sole();
-        $revoked = ActivityLog::where('action', 'user.api_token_revoked')->sole();
+        $created = ActivityLog::where('action', 'data.api_token_created')->sole();
+        $revoked = ActivityLog::where('action', 'data.api_token_revoked')->sole();
         $this->assertEquals(['token_id' => $id, 'name' => 'CI'], array_intersect_key($created->changes, ['token_id' => 1, 'name' => 1]));
         $this->assertSame((string) $this->user->id, $revoked->subject_id);
         $this->assertStringNotContainsString(explode('|', $plain)[1], json_encode($created->changes));

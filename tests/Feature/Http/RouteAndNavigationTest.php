@@ -50,7 +50,9 @@ class RouteAndNavigationTest extends TestCase
 
             $this->assertContains('auth:sanctum', $middleware, "API route {$route->uri()} needs a token.");
             $this->assertContains(\App\Http\Middleware\EnsureTokenUserIsActive::class, $middleware, "API route {$route->uri()} needs the active check.");
-            $this->assertContains('throttle:api', $middleware, "API route {$route->uri()} must be rate limited.");
+            $this->assertContains(\App\Http\Middleware\ThrottleApi::class, $middleware, "API route {$route->uri()} must be rate limited.");
+            $this->assertContains('can:'.\App\Support\Ability::EXPORT_DATA, $middleware, "API route {$route->uri()} needs export-data.");
+            $this->assertContains(\Laravel\Sanctum\Http\Middleware\CheckAbilities::class.':read', $middleware, "API route {$route->uri()} needs the read ability.");
             $this->assertStringStartsWith('api/v1/', $route->uri());
         }
     }

@@ -26,6 +26,9 @@ Route::middleware('can:'.Ability::IMPORT_DATA)->prefix('employees/import')->name
     Route::delete('/{token}', [EmployeeImportController::class, 'cancel'])->whereUuid('token')->name('cancel');
 });
 
-// Personal access tokens of the REST API (every user; a token acts with its owner's role).
-Route::post('/account/tokens', [ApiTokenController::class, 'store'])->middleware('throttle:10,1')->name('account.tokens.store');
+// Personal access tokens of the REST API: created with export-data (a token acts with its owner's role),
+// revoked by their owner at any time.
+Route::post('/account/tokens', [ApiTokenController::class, 'store'])
+    ->middleware(['can:'.Ability::EXPORT_DATA, 'throttle:10,1'])
+    ->name('account.tokens.store');
 Route::delete('/account/tokens/{token}', [ApiTokenController::class, 'destroy'])->whereNumber('token')->name('account.tokens.destroy');

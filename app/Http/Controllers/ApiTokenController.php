@@ -9,7 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
 /**
- * "My account" -> API tokens: every user manages their own personal access
+ * "My account" -> API tokens: users with export-data manage their own personal access
  * tokens. A token acts with its owner's role and scope; its plain text is
  * shown once, after creation.
  */
@@ -37,7 +37,7 @@ class ApiTokenController extends Controller
         $expiresAt = ! empty($validated['expires_in']) ? now()->addDays((int) $validated['expires_in']) : null;
         $token = $user->createToken($validated['token_name'], ['read'], $expiresAt);
 
-        AuditLogger::log('user.api_token_created', ActivityLog::SUBJECT_USER, $user->id, [
+        AuditLogger::log('data.api_token_created', ActivityLog::SUBJECT_USER, $user->id, [
             'token_id' => $token->accessToken->id,
             'name' => $validated['token_name'],
             'expires_at' => $expiresAt?->format('Y-m-d H:i:s'),
@@ -54,7 +54,7 @@ class ApiTokenController extends Controller
         $model = $user->tokens()->whereKey($token)->firstOrFail();
         $model->delete();
 
-        AuditLogger::log('user.api_token_revoked', ActivityLog::SUBJECT_USER, $user->id, [
+        AuditLogger::log('data.api_token_revoked', ActivityLog::SUBJECT_USER, $user->id, [
             'token_id' => $model->id,
             'name' => $model->name,
         ], $user);

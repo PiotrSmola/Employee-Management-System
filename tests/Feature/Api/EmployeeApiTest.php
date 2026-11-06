@@ -4,7 +4,9 @@ namespace Tests\Feature\Api;
 
 use App\Models\Employee;
 use App\Models\User;
+use App\Support\Ability;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Testing\TestResponse;
 use Tests\Concerns\BuildsDirectory;
@@ -196,8 +198,34 @@ class EmployeeApiTest extends TestCase
         $this->assertSame([$this->alpha->dept_no], array_column($departments, 'dept_no'));
     }
 
-    public function test_viewers_get_no_salary_data(): void
+    public function test_the_api_requires_export_data(): void
     {
+        $viewer = User::factory()->viewer()->create();
+        $token = $this->token($viewer);
+
+        foreach (['/api/v1/employees', '/api/v1/employees/1', '/api/v1/departments'] as $uri) {
+            $this->api($uri, $token)->assertStatus(403)->assertJsonPath('error.code', 'forbidden');
+        }
+
+        foreach ([User::factory()->admin()->create(), User::factory()->hr()->create(), User::factory()->manager($this->alpha)->create()] as $user) {
+            $this->api('/api/v1/departments', $this->token($user))->assertOk();
+        }
+    }
+
+    public function test_tokens_need_the_read_ability(): void
+    {
+        $user = User::factory()->admin()->create();
+        $token = $user->createToken('other', ['write'])->plainTextToken;
+
+        $this->api('/api/v1/departments', $token)->assertStatus(403)->assertJsonPath('error.code', 'forbidden');
+    }
+
+    /**
+     * No role has export-data without view-salaries today; the rule still holds should the matrix change.
+     */
+    public function test_users_without_view_salaries_get_no_salary_data(): void
+    {
+        Gate::define(Ability::EXPORT_DATA, fn () => true);
         $token = $this->token(User::factory()->viewer()->create());
 
         $list = $this->api('/api/v1/employees', $token)->assertOk();
@@ -260,7 +288,7 @@ class EmployeeApiTest extends TestCase
 
     public function test_departments_with_current_head_count(): void
     {
-        $token = $this->token(User::factory()->viewer()->create());
+        $token = $this->token(User::factory()->hr()->create());
 
         $data = collect($this->api('/api/v1/departments', $token)->assertOk()->json('data'))->keyBy('dept_no');
 
@@ -296,6 +324,18 @@ class EmployeeApiTest extends TestCase
     public function test_the_default_limit_is_sixty_per_minute(): void
     {
         $this->assertSame(60, (int) config('data_tools.api.rate_limit'));
+    }
+
+    public function test_requests_without_a_valid_token_are_limited_per_ip_before_authentication(): void
+    {
+        config(['data_tools.api.guest_rate_limit' => 2]);
+        $valid = $this->token(User::factory()->admin()->create());
+
+        $this->api('/api/v1/departments', 'guess-1')->assertStatus(401);
+        $this->api('/api/v1/departments', 'guess-2')->assertStatus(401);
+        $this->api('/api/v1/departments', 'guess-3')->assertStatus(429)->assertJsonPath('error.code', 'too_many_requests');
+
+        $this->api('/api/v1/departments', $valid)->assertOk();
     }
 
     // ---------------------------------------------------------- large ids

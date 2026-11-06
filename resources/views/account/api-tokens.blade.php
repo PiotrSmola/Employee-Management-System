@@ -1,4 +1,6 @@
-{{-- "My account" -> API tokens ($apiTokens, $maxApiTokens: DataToolsServiceProvider view composer). --}}
+{{-- "My account" -> API tokens ($apiTokens, $maxApiTokens: DataToolsServiceProvider view composer).
+     The API requires export-data; without it only existing tokens can be revoked. --}}
+@if (count($apiTokens) > 0 || Gate::allows('export-data'))
 <div class="card mt-4" id="api-tokens">
     <div class="card-header d-flex justify-content-between align-items-center">
         <h5 class="mb-0 text-body-emphasis"><i class="bi bi-braces-asterisk me-2"></i>{{ __('API tokens') }}</h5>
@@ -6,7 +8,7 @@
     </div>
     <div class="card-body">
         <p class="small text-body-secondary">
-            {{ __('Personal access tokens for the REST API (/api/v1). A token can read what you can see in the directory - with your role, department and salary access - and stops working when it is revoked, expires or your account is deactivated.') }}
+            {{ __('Personal access tokens for the REST API (/api/v1). A token can read what you can see in the directory - with your role, department and salary access. All your tokens are revoked when your password or role changes or your account is deactivated.') }}
         </p>
 
         @if (session('api_token_plain'))
@@ -23,6 +25,7 @@
             </div>
         @endif
 
+        @can('export-data')
         <form method="POST" action="{{ route('account.tokens.store') }}" class="row g-2 align-items-end mb-3">
             @csrf
             <div class="col-md-5">
@@ -49,6 +52,7 @@
                 </button>
             </div>
         </form>
+        @endcan
 
         <div class="table-responsive">
             <table class="table table-sm align-middle mb-0">
@@ -100,3 +104,4 @@
         </p>
     </div>
 </div>
+@endif
