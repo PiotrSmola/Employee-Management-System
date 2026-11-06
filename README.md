@@ -316,7 +316,8 @@ Reports are served from the cache (about 0.1 s per page). A page whose figures a
 yet computes them in the request: on the full dataset 5-11 s for a workforce page and 9-22 s for a
 compensation page on an idle server, several times that while the database is busy (the default
 128 MB InnoDB buffer pool is smaller than the dataset, so a larger pool helps most).
-`php artisan reports:warm` computes the current state of all scopes ahead of the visitors. Computing
+`php artisan reports:warm` computes the current state of all 19 scopes ahead of the visitors, in
+about 3.5 minutes on an idle server. Computing
 the company-wide compensation figures needs about 105 MB of PHP memory in total.
 
 The role restrictions do not change this: a viewer's list (salary data stripped) renders like an

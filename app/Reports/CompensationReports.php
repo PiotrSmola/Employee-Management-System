@@ -317,7 +317,7 @@ class CompensationReports
      * and take far longer than the join itself. A cursor does not save memory here:
      * PDO's MySQL client buffers the whole result, and the loop keeps one number per
      * employee and group. Together that is about 60 MB on the full dataset, on top of
-     * the 45 MB of the framework, so keep memory_limit above 128 MB in mind.
+     * the 45 MB of the framework: close to PHP's default memory_limit of 128 MB.
      *
      * @return array{overall: array<string, mixed>, departments: array<string, array<string, mixed>>, titles: array<string, array<string, mixed>>}
      */

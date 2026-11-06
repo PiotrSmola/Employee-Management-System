@@ -316,6 +316,16 @@ class ReportEdgeCasesTest extends TestCase
         ));
     }
 
+    public function test_the_current_state_is_cached_per_day(): void
+    {
+        $this->buildReportData();
+        $today = ReportCache::key('snapshot', $this->context());
+
+        $this->travel(1)->days();
+
+        $this->assertNotSame($today, ReportCache::key('snapshot', $this->context()));
+    }
+
     public function test_a_viewer_gets_no_csv_at_all(): void
     {
         $this->buildReportData();
