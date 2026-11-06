@@ -188,13 +188,18 @@ remembered in the browser). Salary columns are only offered - and only ever writ
   **Data tools → My exports** (status, rows, size, download, delete; the page refreshes while
   an export is running). A queued PDF holds at most 5,000 rows (`EXPORTS_QUEUED_PDF_LIMIT`, the
   PDF says so when cut off) - use CSV / XLSX for more.
-- Every user only sees their own exports. Files are kept in `storage/app/exports` and deleted
-  after 7 days (`EXPORTS_RETENTION_DAYS`) by `php artisan exports:prune [--days=N]`, which the
-  scheduler runs daily at 03:00.
+- A user may have 3 unfinished exports at a time (`EXPORTS_MAX_ACTIVE_PER_USER`), and the export
+  endpoint takes 10 requests per minute.
+- Every user only sees their own exports. Files are kept in `storage/app/exports`; finished
+  exports are deleted after 7 days (`EXPORTS_RETENTION_DAYS`) by
+  `php artisan exports:prune [--days=N]` (at least 1), which the scheduler runs daily at 03:00.
+  It also marks exports as failed that ran past the job's timeout or waited for more than
+  24 hours (`EXPORTS_PENDING_TIMEOUT_HOURS`); unfinished exports are never deleted.
 - XLSX files are written row by row with openspout (constant memory); numbers and dates are
   typed cells, text is never turned into a formula. CSV cells starting with `= + - @` are
   prefixed with `'`.
-- Every export is audited (`data.exported`: format, rows, columns, filters, queued or not).
+- Every export is audited (`data.exported`: format, rows, columns, filters, queued or not), and
+  so are downloads from My exports (`data.export_downloaded`).
 
 ### Queue worker
 `QUEUE_CONNECTION=database` in Docker; the `worker` service runs
@@ -213,14 +218,18 @@ at the hire date, duplicates within the file or of existing employees by name + 
 Only a file without errors can be confirmed; then all employees are created in one
 transaction with a current department, title and salary from the hire date, the next free
 employee numbers (allocated under a lock), the dashboard caches are flushed and the import
-is audited (`data.imported`: count, file name, employee number range). Limits: 5,000 rows and
-5 MB per file (`IMPORTS_MAX_ROWS`, `IMPORTS_MAX_FILE_KB`); CSV files may use `,` or `;`.
+is audited (`data.imported`: count, file name, employee number range). Limits: 5,000 rows
+(blank ones included) and 5 MB per file (`IMPORTS_MAX_ROWS`, `IMPORTS_MAX_FILE_KB`), 100 MB
+unpacked for XLSX (`IMPORTS_MAX_UNPACKED_KB`), one staged upload per user. CSV files may use `,`
+or `;`, in UTF-8, UTF-16 with a byte order mark, or Windows-1250 (a Polish Excel's "CSV").
 
 ### REST API
 Read-only JSON API (`/api/v1/employees`, `/api/v1/employees/{emp_no}`, `/api/v1/departments`)
-with personal access tokens created under **My account → API tokens**. A token has its
-owner's role, department scope and salary access; 60 requests per minute per user. See
-[docs/API.md](docs/API.md) for parameters, responses and curl examples.
+with personal access tokens created under **My account → API tokens**. The API requires
+`export-data`, so viewers have no access. A token has its owner's role, department scope and
+salary access, and is revoked when the password or role changes or the account is deactivated;
+60 requests per minute per user. See [docs/API.md](docs/API.md) for parameters, responses and
+curl examples.
 
 ## Manual Installation
 

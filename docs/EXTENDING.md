@@ -27,8 +27,9 @@ Route::middleware('can:'.Ability::VIEW_REPORTS)->prefix('reports')->name('report
 - `/employees/{emp_no}` only matches numbers, so `/employees/create`, `/employees/import`, ...
   can live in another file. Use the same `->whereNumber(...)` for your own numeric parameters.
 - API routes (Sanctum) are not web routes: they live in `routes/api.php` (registered in
-  `bootstrap/app.php`, prefix `/api/v1`, middleware `auth:sanctum` + `EnsureTokenUserIsActive` +
-  `throttle:api`; JSON errors via `AppHttpApiApiErrorRenderer`). See [API.md](API.md).
+  `bootstrap/app.php`, prefix `/api/v1`, middleware `ThrottleApi`, `auth:sanctum`,
+  `EnsureTokenUserIsActive`, the `read` ability, `can:export-data`; JSON errors via
+  `App\Http\Api\ApiErrorRenderer`). See [API.md](API.md).
 
 ## Navbar items: `resources/views/layouts/nav/{main,user}/<NN>-<feature>.blade.php`
 
@@ -128,9 +129,9 @@ Signature: `AuditLogger::log(string $action, string $subjectType, string|int|nul
   `department.manager_assigned`, `data.imported`, ... Existing ones: `user.created`,
   `user.updated`, `user.role_changed`, `user.password_reset`, `user.password_changed`,
   `user.deleted`, `auth.login`, `auth.login_failed` (`changes`: `email`, `reason`),
-  `user.api_token_created`, `user.api_token_revoked`, `data.exported` (subject `export`, id of a
-  queued export or null), `data.imported` (subject `import`, `changes`: `count`, `file`,
-  `first_emp_no`, `last_emp_no`, `departments`).
+  `data.api_token_created`, `data.api_token_revoked` (subject `user`), `data.exported` (subject
+  `export`, id of a queued export or null), `data.export_downloaded`, `data.imported` (subject
+  `import`, `changes`: `count`, `file`, `first_emp_no`, `last_emp_no`, `departments`).
 - `subjectType` is a short alias (`ActivityLog::SUBJECT_EMPLOYEE|DEPARTMENT|USER|EXPORT|IMPORT`; add a
   constant for a new one), `subjectId` the emp_no / dept_no / user id (stored as a string).
 - The acting user defaults to the signed-in user (pass it explicitly in queued jobs), the IP to

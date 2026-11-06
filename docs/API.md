@@ -5,6 +5,9 @@ Read-only JSON API over the employee directory. Base URL: `http://<host>/api/v1`
 
 ## Authentication
 
+The API is a bulk data interface: it requires the `export-data` ability (admin, HR, manager).
+Viewers cannot create tokens, and any token of a viewer is answered with 403.
+
 Create a **personal access token** under *My account → API tokens* (name, expiry 30/90/365
 days or never). The token is shown **once**; only its hash is stored. Send it as a bearer token:
 
@@ -16,14 +19,17 @@ curl -H "Authorization: Bearer $EMS_TOKEN" -H "Accept: application/json" http://
 - A token acts **as its owner**: same role, same manager department scope, same salary rules
   as the web directory (docs/AUTHORIZATION.md). Changing the user's role changes what the
   token can read.
-- Tokens stop working when they are revoked, expire, or the account is deactivated (403 while
-  inactive). A web session (cookie) does **not** authenticate the API.
-- Up to 20 tokens per user. Creating and revoking tokens is audited (`user.api_token_created`,
-  `user.api_token_revoked`).
+- All tokens of a user are **revoked** when their password is changed or reset, their role
+  changes, or the account is deactivated or deleted; create a new one afterwards. A web session
+  (cookie) does **not** authenticate the API. Tokens have the `read` ability, which every
+  endpoint requires.
+- Up to 20 tokens per user. Creating and revoking tokens is audited (`data.api_token_created`,
+  `data.api_token_revoked`); individual API requests are not.
 
 ## Rate limit
 
-60 requests per minute per user (all tokens of a user share the limit; `API_RATE_LIMIT`).
+60 requests per minute per user (all tokens of a user share the limit; `API_RATE_LIMIT`), and
+30 per minute per IP address for requests without a valid token (`API_GUEST_RATE_LIMIT`).
 Responses carry `X-RateLimit-Limit` / `X-RateLimit-Remaining`; above the limit the API answers
 `429` with a `Retry-After` header.
 
@@ -38,7 +44,7 @@ Every error has the same shape:
 | Status | `code` | When |
 |-------:|--------|------|
 | 401 | `unauthenticated` | missing, unknown, revoked or expired token |
-| 403 | `forbidden` | deactivated account, employee outside a manager's department |
+| 403 | `forbidden` | no `export-data` (viewers), deactivated account, token without `read`, employee outside a manager's department |
 | 404 | `not_found` | unknown employee or endpoint |
 | 405 | `method_not_allowed` | e.g. `POST` (the API is read-only) |
 | 422 | `validation_failed` | invalid parameters; details in `error.fields` (`{"per_page": ["..."]}`) |
@@ -87,8 +93,8 @@ curl -H "Authorization: Bearer $EMS_TOKEN" "http://localhost:8000/api/v1/employe
 ```
 
 - Former employees have `"status": "former"` and their **last** department / title.
-- `salary` (current salary) is present only for users with salary access (admin, HR, manager);
-  for viewers the key is missing everywhere.
+- `salary` (current salary) is present only with `view-salaries`, otherwise the key is missing
+  everywhere. Every role with API access has it today; the rule applies should that change.
 - `meta.filters` shows the filters actually applied - for a manager `department` is always
   their own department, whatever was requested.
 
@@ -135,8 +141,9 @@ A manager only gets their own department.
 
 ## Implementation notes
 
-- Routes: `routes/api.php` (prefix `/api/v1`, middleware `auth:sanctum`,
-  `App\Http\Middleware\EnsureTokenUserIsActive`, `throttle:api`); controllers in
+- Routes: `routes/api.php` (prefix `/api/v1`, middleware `App\Http\Middleware\ThrottleApi`, which
+  runs before authentication, `auth:sanctum`, `App\Http\Middleware\EnsureTokenUserIsActive`,
+  the `read` ability and `can:export-data`); controllers in
   `App\Http\Controllers\Api\V1`. The list uses `EmployeeVisibility::query()` - the same
   query object as the directory - so new filters / scope rules apply to both.
 - Error format: `App\Http\Api\ApiErrorRenderer` (registered for `/api/*` in
