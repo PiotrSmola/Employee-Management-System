@@ -21,4 +21,12 @@ php artisan view:cache >/dev/null
 
 chown -R www-data:www-data storage bootstrap/cache
 
+# First start: compute the department and report figures in the background, as Apache's
+# user, so the first visitors find them cached. The app does not wait for this. The mark
+# lives on the cache volume; the scheduler keeps the figures warm from then on.
+WARMED_MARK=storage/framework/cache/.figures-warmed
+if [ ! -f "$WARMED_MARK" ]; then
+    su -s /bin/sh www-data -c "php artisan departments:warm && php artisan reports:warm && touch $WARMED_MARK" &
+fi
+
 exec "$@"
