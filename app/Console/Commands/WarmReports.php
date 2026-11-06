@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Reports\ReportCache;
 use App\Reports\ReportCatalog;
 use App\Reports\ReportContext;
+use App\Reports\ReportsBusyException;
 use App\Support\EmployeeVisibility;
 use Illuminate\Console\Command;
 use Throwable;
@@ -16,15 +17,18 @@ use Throwable;
  * Precomputes the cached report figures for the current state (or --as-of) of
  * the whole company, every department filter and every manager's department
  * scope, so the report pages are served from the cache. Figures that are
- * already cached are kept unless --fresh is given. Scheduled hourly
- * (routes/console.php): after EmployeeDataCache::flush() the next run rebuilds them.
- * A scope that fails does not stop the others; the command then ends with an error.
+ * still fresh are kept unless --fresh is given. Scheduled hourly
+ * (routes/console.php): the next run after EmployeeDataCache::flush() or midnight
+ * rebuilds them. A scope that fails does not stop the others; the command then
+ * ends with an error. A scope another process is computing for the first time
+ * is skipped.
  */
 class WarmReports extends Command
 {
     protected $signature = 'reports:warm
         {--as-of= : Date (Y-m-d) to warm instead of the current state}
         {--department=* : Only these departments (dept_no); default: all}
+        {--scope= : Only this scope: all, dept-<dept_no> or mgr-<dept_no>}
         {--fresh : Recompute figures that are already cached}';
 
     protected $description = 'Precompute the cached report figures';
@@ -47,7 +51,7 @@ class WarmReports extends Command
             return self::FAILURE;
         }
 
-        app()->instance(ReportCache::class, (new ReportCache)->refreshing((bool) $this->option('fresh'))->unguarded());
+        app()->instance(ReportCache::class, (new ReportCache)->warming((bool) $this->option('fresh')));
         $catalog = app(ReportCatalog::class);
 
         $contexts = ['all' => ReportContext::make(EmployeeVisibility::unrestricted(), null, $asOf)];
@@ -58,6 +62,10 @@ class WarmReports extends Command
             $contexts['manager '.$deptNo] = ReportContext::make(EmployeeVisibility::for($manager), null, $asOf);
         }
 
+        if ($this->option('scope') !== null) {
+            $contexts = array_filter($contexts, fn (ReportContext $context) => $context->scopeKey() === $this->option('scope'));
+        }
+
         $total = microtime(true);
         $failed = [];
         foreach ($contexts as $label => $context) {
@@ -66,6 +74,8 @@ class WarmReports extends Command
             try {
                 $catalog->warm($context);
                 $this->line(sprintf('  %-14s %6.2f s', $label, microtime(true) - $started));
+            } catch (ReportsBusyException) {
+                $this->line(sprintf('  %-14s skipped, already being computed', $label));
             } catch (Throwable $e) {
                 report($e);
                 $failed[] = $label;
@@ -73,8 +83,11 @@ class WarmReports extends Command
             }
         }
 
+        // A later request of this process (the refresh after a response) reads again.
+        app()->forgetInstance(ReportCache::class);
+
         $warmed = count($contexts) - count($failed);
-        $summary = sprintf('Warmed %d of %d report scopes (%s) in %.1f s.', $warmed, count($contexts), $contexts['all']->asOfKey(), microtime(true) - $total);
+        $summary = sprintf('Warmed %d of %d report scopes in %.1f s.', $warmed, count($contexts), microtime(true) - $total);
 
         if ($failed !== []) {
             $this->error($summary.' Failed: '.implode(', ', $failed).'.');

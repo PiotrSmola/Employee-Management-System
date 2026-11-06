@@ -52,11 +52,7 @@ class ReportController extends Controller
 
         $context = ReportContext::fromInput(EmployeeVisibility::for($request->user()), $request->query());
 
-        try {
-            $table = $this->catalog->table($report, $context);
-        } finally {
-            $this->cache->release();
-        }
+        $table = $this->catalog->table($report, $context);
 
         $filename = sprintf('report_%s_%s_%s.csv', $report, $context->department ?? 'all', $context->date());
 
@@ -75,12 +71,8 @@ class ReportController extends Controller
         $errors = [];
         $context = ReportContext::fromInput(EmployeeVisibility::for($request->user()), $request->query(), $errors);
 
-        try {
-            $summary = $this->catalog->summary($section, $context);
-            $tables = $this->catalog->tables($section, $context);
-        } finally {
-            $this->cache->release();
-        }
+        $summary = $this->catalog->summary($section, $context);
+        $tables = $this->catalog->tables($section, $context);
 
         $departments = Department::query()->orderBy('dept_no')->pluck('dept_name', 'dept_no')->all();
 
@@ -90,6 +82,7 @@ class ReportController extends Controller
             'inputErrors' => $errors,
             'summary' => $summary,
             'tables' => $tables,
+            'figuresStatus' => $this->cache->status(),
             'departments' => $departments,
         ]);
     }

@@ -7,6 +7,9 @@ use App\Models\DeptEmp;
 use App\Models\Employee;
 use App\Models\Salary;
 use App\Models\Title;
+use App\Reports\ReportCache;
+use App\Reports\ReportContext;
+use App\Support\FigureCache;
 
 /**
  * A small company with an exactly known history for the report tests:
@@ -28,6 +31,12 @@ trait BuildsReportData
 
     /** @var array<string, Employee> */
     protected array $people = [];
+
+    /** Is the figure cached and fresh for $context? */
+    protected function figureIsCached(string $figure, ReportContext $context): bool
+    {
+        return FigureCache::isFresh(ReportCache::key($figure, $context), ReportCache::version($context));
+    }
 
     protected function buildReportData(): void
     {

@@ -9,6 +9,7 @@ use App\Reports\ReportCache;
 use App\Reports\ReportCatalog;
 use App\Reports\ReportContext;
 use App\Support\EmployeeVisibility;
+use App\Support\FigureCache;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -44,7 +45,7 @@ class WarmReportsCommandTest extends TestCase
         ];
         foreach ($contexts as $context) {
             foreach (['movements', 'snapshot', 'title_gender', 'salary_snapshot', 'salary_growth'] as $figure) {
-                $this->assertTrue(Cache::has(ReportCache::key($figure, $context)), "{$figure} {$context->scopeKey()}");
+                $this->assertTrue($this->figureIsCached($figure, $context), "{$figure} {$context->scopeKey()}");
             }
         }
     }
@@ -54,8 +55,8 @@ class WarmReportsCommandTest extends TestCase
         $this->artisan('reports:warm', ['--as-of' => '1995-12-31', '--department' => ['d002']])->assertSuccessful();
 
         $context = ReportContext::make(EmployeeVisibility::unrestricted(), 'd002', CarbonImmutable::parse('1995-12-31'));
-        $this->assertTrue(Cache::has(ReportCache::key('snapshot', $context)));
-        $this->assertFalse(Cache::has(ReportCache::key('snapshot', ReportContext::make(EmployeeVisibility::unrestricted(), 'd001', CarbonImmutable::parse('1995-12-31')))));
+        $this->assertTrue($this->figureIsCached('snapshot', $context));
+        $this->assertFalse($this->figureIsCached('snapshot', ReportContext::make(EmployeeVisibility::unrestricted(), 'd001', CarbonImmutable::parse('1995-12-31'))));
 
     }
 
@@ -65,7 +66,7 @@ class WarmReportsCommandTest extends TestCase
         $this->artisan('reports:warm', $options)->assertFailed();
 
         $context = ReportContext::make(EmployeeVisibility::unrestricted());
-        $this->assertFalse(Cache::has(ReportCache::key('movements', $context)));
+        $this->assertFalse($this->figureIsCached('movements', $context));
     }
 
     /**
@@ -81,11 +82,31 @@ class WarmReportsCommandTest extends TestCase
         ];
     }
 
+    public function test_scope_option_warms_one_scope(): void
+    {
+        $this->artisan('reports:warm', ['--scope' => 'dept-d002'])
+            ->expectsOutputToContain('Warmed 1 of 1 report scopes')
+            ->assertSuccessful();
+
+        $this->assertTrue($this->figureIsCached('snapshot', ReportContext::make(EmployeeVisibility::unrestricted(), 'd002')));
+        $this->assertFalse($this->figureIsCached('snapshot', ReportContext::make(EmployeeVisibility::unrestricted())));
+    }
+
+    public function test_a_scope_another_process_computes_for_the_first_time_is_skipped(): void
+    {
+        $context = ReportContext::make(EmployeeVisibility::unrestricted());
+        $this->assertTrue(Cache::lock(FigureCache::lockKey(ReportCache::key('movements', $context)), 60)->get());
+
+        $this->artisan('reports:warm', ['--scope' => 'all'])
+            ->expectsOutputToContain('skipped, already being computed')
+            ->assertSuccessful();
+    }
+
     public function test_department_option_uses_the_database_value(): void
     {
         $this->artisan('reports:warm', ['--department' => ['D002']])->assertSuccessful();
 
-        $this->assertTrue(Cache::has(ReportCache::key('snapshot', ReportContext::make(EmployeeVisibility::unrestricted(), 'd002'))));
+        $this->assertTrue($this->figureIsCached('snapshot', ReportContext::make(EmployeeVisibility::unrestricted(), 'd002')));
     }
 
     public function test_a_failing_scope_does_not_stop_the_others(): void

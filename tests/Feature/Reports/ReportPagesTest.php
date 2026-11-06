@@ -12,6 +12,7 @@ use App\Reports\WorkforceReports;
 use App\Support\Ability;
 use App\Support\EmployeeDataCache;
 use App\Support\EmployeeVisibility;
+use App\Support\FigureCache;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -174,9 +175,9 @@ class ReportPagesTest extends TestCase
     public function test_reports_are_cached_until_the_employee_data_cache_is_flushed(): void
     {
         $context = ReportContext::make(EmployeeVisibility::for($this->user));
-        $this->get(route('reports.compensation'))->assertOk();
-        $this->assertTrue(Cache::has(ReportCache::key('salary_snapshot', $context)));
-        $this->assertFalse(Cache::has(ReportCache::key('movements', $context)), 'Workforce figures are only computed by their page.');
+        $this->get(route('reports.compensation'))->assertOk()->assertDontSee('id="figures-stale"', false);
+        $this->assertTrue($this->figureIsCached('salary_snapshot', $context));
+        $this->assertFalse($this->figureIsCached('movements', $context), 'Workforce figures are only computed by their page.');
 
         Salary::query()->where('emp_no', $this->people['E1']->emp_no)->where('salary', 50000)->update(['salary' => 90000]);
         $this->get(route('reports.compensation'))->assertSee('$66,250');
@@ -184,22 +185,76 @@ class ReportPagesTest extends TestCase
         $before = EmployeeDataCache::reportsVersion();
         EmployeeDataCache::flush();
         $this->assertNotSame($before, EmployeeDataCache::reportsVersion());
-        $this->assertFalse(Cache::has(ReportCache::key('salary_snapshot', $context)));
+        $this->assertFalse($this->figureIsCached('salary_snapshot', $context));
+
+        // The next visitor gets the last good copy, and the figure is recomputed after the response.
+        $this->get(route('reports.compensation'))->assertSee('$66,250')->assertSee('id="figures-stale"', false);
+        $this->assertTrue($this->figureIsCached('salary_snapshot', $context));
 
         // (90000 + 70000 + 80000 + 65000) / 4
         $this->get(route('reports.compensation'))->assertSee('$76,250');
     }
 
+    public function test_a_flush_never_makes_a_visitor_wait_for_figures_that_were_computed_before(): void
+    {
+        $context = ReportContext::make(EmployeeVisibility::for($this->user));
+        $this->get(route('reports.workforce'))->assertOk();
+
+        EmployeeDataCache::flush();
+        $this->assertTrue(Cache::lock(FigureCache::lockKey(ReportCache::key('movements', $context)), 60)->get(), 'Another process recomputes it.');
+
+        $this->get(route('reports.workforce'))->assertOk();
+        $this->get(route('reports.csv', 'headcount'))->assertOk();
+    }
+
+    public function test_the_current_state_stays_available_over_midnight(): void
+    {
+        $this->get(route('reports.workforce'))->assertOk();
+
+        $this->travel(1)->days();
+        $context = ReportContext::make(EmployeeVisibility::for($this->user));
+        $this->assertFalse($this->figureIsCached('snapshot', $context), 'Ages and tenures change with the date.');
+        $this->assertTrue(Cache::lock(FigureCache::lockKey(ReportCache::key('snapshot', $context)), 60)->get(), 'Another process recomputes it.');
+
+        $this->get(route('reports.workforce'))->assertOk();
+    }
+
+    public function test_figures_are_refreshed_after_the_response_of_the_visitor_who_got_the_stale_copy(): void
+    {
+        $this->get(route('reports.workforce'))->assertOk();
+        $context = ReportContext::make(EmployeeVisibility::for($this->user));
+        EmployeeDataCache::flush();
+
+        $this->get(route('reports.workforce'))->assertOk();
+
+        foreach (['movements', 'snapshot', 'title_gender'] as $figure) {
+            $this->assertTrue($this->figureIsCached($figure, $context), $figure);
+        }
+    }
+
+    public function test_a_stale_copy_stays_in_its_scope(): void
+    {
+        $this->get(route('reports.workforce'))->assertOk();
+        $manager = User::factory()->manager('d001')->create();
+        $context = ReportContext::make(EmployeeVisibility::for($manager));
+
+        EmployeeDataCache::flush();
+
+        $this->assertFalse($this->figureIsCached('snapshot', $context));
+        $this->actingAs($manager);
+        $this->assertTrue(Cache::lock(FigureCache::lockKey(ReportCache::key('snapshot', $context)), 60)->get(), 'Another process computes it.');
+
+        $this->get(route('reports.workforce'))->assertStatus(503);
+    }
+
     public function test_cache_keys_are_per_figure_scope_and_date(): void
     {
-        $version = EmployeeDataCache::reportsVersion();
         $admin = EmployeeVisibility::for($this->user);
         $manager = EmployeeVisibility::for(User::factory()->manager('d001')->create());
 
-        $today = now()->toDateString();
-        $this->assertSame("reports:{$version}:snapshot:all:current-{$today}", ReportCache::key('snapshot', ReportContext::make($admin)));
-        $this->assertSame("reports:{$version}:snapshot:dept-d001:1995-12-31", ReportCache::key('snapshot', ReportContext::make($admin, 'd001', CarbonImmutable::parse('1995-12-31'))));
-        $this->assertSame("reports:{$version}:snapshot:mgr-d001:current-{$today}", ReportCache::key('snapshot', ReportContext::make($manager, 'd002')));
+        $this->assertSame('reports:snapshot:all:current', ReportCache::key('snapshot', ReportContext::make($admin)));
+        $this->assertSame('reports:snapshot:dept-d001:1995-12-31', ReportCache::key('snapshot', ReportContext::make($admin, 'd001', CarbonImmutable::parse('1995-12-31'))));
+        $this->assertSame('reports:snapshot:mgr-d001:current', ReportCache::key('snapshot', ReportContext::make($manager, 'd002')));
     }
 
     public function test_history_tables_are_only_reached_through_report_sources(): void
@@ -219,7 +274,8 @@ class ReportPagesTest extends TestCase
 
     public function test_a_cold_report_waits_for_the_running_computation(): void
     {
-        $this->assertTrue(Cache::lock(ReportCache::LOCK, 60)->get());
+        $context = ReportContext::make(EmployeeVisibility::for($this->user));
+        $this->assertTrue(Cache::lock(FigureCache::lockKey(ReportCache::key('snapshot', $context)), 60)->get());
 
         $this->get(route('reports.workforce'))
             ->assertStatus(503)
@@ -230,18 +286,20 @@ class ReportPagesTest extends TestCase
 
     public function test_cached_reports_are_served_during_a_computation(): void
     {
+        $context = ReportContext::make(EmployeeVisibility::for($this->user));
         $this->get(route('reports.workforce'))->assertOk();
-        $this->assertTrue(Cache::lock(ReportCache::LOCK, 60)->get());
+        $this->assertTrue(Cache::lock(FigureCache::lockKey(ReportCache::key('snapshot', $context)), 60)->get());
 
         $this->get(route('reports.workforce'))->assertOk();
         $this->get(route('reports.csv', 'age'))->assertOk();
     }
 
-    public function test_a_request_releases_the_computation_lock(): void
+    public function test_a_request_releases_the_computation_locks(): void
     {
+        $context = ReportContext::make(EmployeeVisibility::for($this->user));
         $this->get(route('reports.workforce'))->assertOk();
 
-        $lock = Cache::lock(ReportCache::LOCK, 60);
+        $lock = Cache::lock(FigureCache::lockKey(ReportCache::key('snapshot', $context)), 60);
         $this->assertTrue($lock->get());
         $lock->release();
     }

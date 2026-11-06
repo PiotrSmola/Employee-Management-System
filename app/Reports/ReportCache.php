@@ -2,49 +2,66 @@
 
 namespace App\Reports;
 
+use App\Support\AfterResponse;
 use App\Support\EmployeeDataCache;
+use App\Support\FigureCache;
 use Closure;
 use Illuminate\Container\Attributes\Scoped;
-use Illuminate\Contracts\Cache\Lock;
-use Illuminate\Support\Facades\Cache;
 
 /**
  * Caches the raw figures of the reports per (figure, department scope, as-of
- * date) in the versioned namespace of EmployeeDataCache, so
- * EmployeeDataCache::flush() retires all of them at once.
+ * date) in FigureCache:
  *
- *   reports:<version>:<figure>:<scope>:<as-of>     e.g. reports:k3j9x0aa:movements:mgr-d005:1995-12-31
+ *   reports:<figure>:<scope>:<as-of>     e.g. reports:movements:mgr-d005:1995-12-31
  *
- * The figures only change when the employee data changes (writers flush), so
- * the TTL is long; `php artisan reports:warm` (scheduled hourly) recomputes the
- * current state of every department after a flush or expiry.
+ * A figure is fresh for its TTL, for one version of the reports (changed by
+ * EmployeeDataCache::flush(), so one write retires all of them at once) and, for
+ * the current state, for one day: ages and tenures change with the date. A
+ * figure that is no longer fresh stays available, so neither a write nor midnight
+ * makes the next visitor wait: they get the last good copy and `reports:warm`
+ * recomputes their scope after the response ({@see AfterResponse}). Scheduled hourly,
+ * it also recomputes the current state of every department ahead of the visitors.
  *
- * Computing a figure can take minutes on a loaded server, so requests compute one
- * at a time: the first missing figure takes a global lock, held until the request
- * calls {@see release()}, and meanwhile other requests that miss the cache get a
- * {@see ReportsBusyException}. Cached figures are served regardless.
+ * Only a figure that was never computed (e.g. a new as-of date) is computed in
+ * the request. One process per figure does that; meanwhile others get a
+ * {@see ReportsBusyException}.
  */
 #[Scoped]
 class ReportCache
 {
-    /** Lifetime of a cached figure in seconds. */
+    /** Seconds a cached figure is fresh. */
     public const TTL = 86400;
 
-    public const LOCK = 'reports:compute';
-
-    /** Longest a request may compute (PHP time limit), and when a dead request's lock expires. */
+    /** Longest a request may compute (PHP time limit). */
     public const COMPUTE_SECONDS = 300;
 
-    /** Bypass the cache (e.g. the warm command with --fresh recomputes on purpose). */
-    private bool $refresh = false;
+    private bool $warming = false;
 
-    private bool $guarded = true;
+    /** Warming also recomputes figures that are still fresh. */
+    private bool $force = false;
 
-    private ?Lock $lock = null;
+    /**
+     * Scopes and dates already waiting for the end of this request.
+     *
+     * @var array<string, true>
+     */
+    private array $refreshing = [];
+
+    /** FigureCache::STALE once this request got a figure that is being refreshed. */
+    private string $status = FigureCache::FRESH;
 
     public static function key(string $figure, ReportContext $context): string
     {
-        return EmployeeDataCache::report($figure, $context->scopeKey(), $context->asOfKey());
+        return EmployeeDataCache::report($figure, $context->scopeKey(), $context->current ? 'current' : $context->date());
+    }
+
+    /**
+     * What a figure depends on besides its key: the reports version and, for the
+     * current state, the day.
+     */
+    public static function version(ReportContext $context): string
+    {
+        return EmployeeDataCache::reportsVersion().($context->current ? ':'.$context->date() : '');
     }
 
     /**
@@ -52,61 +69,74 @@ class ReportCache
      *
      * @param  Closure(): T  $compute
      * @return T
+     *
+     * @throws ReportsBusyException nothing cached yet and another process is computing it
      */
     public function remember(string $figure, ReportContext $context, Closure $compute): mixed
     {
         $key = self::key($figure, $context);
+        $version = self::version($context);
 
-        if (! $this->refresh) {
-            $value = Cache::get($key);
-
-            if ($value !== null) {
-                return $value;
-            }
+        if ($this->warming) {
+            FigureCache::refresh($key, self::TTL, $compute, ! $this->force, $version);
         }
 
-        $this->acquire();
-        $value = $compute();
-        Cache::put($key, $value, self::TTL);
+        $read = FigureCache::read(
+            $key,
+            self::TTL,
+            fn () => $this->limited($compute),
+            fn () => $this->refreshAfterResponse($context),
+            $version,
+        );
 
-        return $value;
-    }
-
-    /** End of a request: let the next one compute. */
-    public function release(): void
-    {
-        $this->lock?->release();
-        $this->lock = null;
-    }
-
-    /** Compute without the lock: the warm command is one process that nobody waits for. */
-    public function unguarded(): static
-    {
-        $this->guarded = false;
-
-        return $this;
-    }
-
-    public function refreshing(bool $refresh = true): static
-    {
-        $this->refresh = $refresh;
-
-        return $this;
-    }
-
-    private function acquire(): void
-    {
-        if (! $this->guarded || $this->lock !== null) {
-            return;
-        }
-
-        $lock = Cache::lock(self::LOCK, self::COMPUTE_SECONDS);
-
-        if (! $lock->get()) {
+        if ($read['status'] === FigureCache::PREPARING) {
             throw new ReportsBusyException;
         }
 
-        $this->lock = $lock;
+        if ($read['status'] === FigureCache::STALE) {
+            $this->status = FigureCache::STALE;
+        }
+
+        return $read['value'];
+    }
+
+    /** How current the figures of this request are. */
+    public function status(): string
+    {
+        return $this->status;
+    }
+
+    /**
+     * Compute figures here instead of after a response (the warm command).
+     */
+    public function warming(bool $force = false): static
+    {
+        $this->warming = true;
+        $this->force = $force;
+
+        return $this;
+    }
+
+    private function limited(Closure $compute): mixed
+    {
         set_time_limit(self::COMPUTE_SECONDS);
+
+        return $compute();
+    }
+
+    private function refreshAfterResponse(ReportContext $context): void
+    {
+        $scope = $context->scopeKey().':'.$context->asOfKey();
+
+        if ($this->warming || isset($this->refreshing[$scope])) {
+            return;
+        }
+
+        $this->refreshing[$scope] = true;
+
+        AfterResponse::artisan('reports:warm', array_filter([
+            '--scope' => $context->scopeKey(),
+            '--as-of' => $context->current ? null : $context->date(),
+        ]));
     }
 }

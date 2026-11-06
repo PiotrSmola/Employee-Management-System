@@ -2,14 +2,15 @@
 
 namespace App\Services;
 
-use App\Jobs\RefreshDepartmentFigures;
+use App\Console\Commands\WarmDepartmentFigures;
 use App\Models\Department;
 use App\Models\Employee;
+use App\Support\AfterResponse;
 use App\Support\EmployeeDataCache;
 use App\Support\EmployeeVisibility;
 use App\Support\FigureCache;
-use Illuminate\Database\Query\Builder;
 use App\Support\HistoryRows;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\JoinClause;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -74,9 +75,7 @@ class DepartmentStatistics
             EmployeeDataCache::DEPARTMENTS_OVERVIEW,
             self::OVERVIEW_TTL,
             fn () => $this->computeOverview(),
-            function (): void {
-                RefreshDepartmentFigures::dispatch()->afterResponse();
-            },
+            fn () => AfterResponse::artisan('departments:warm', ['--only' => [WarmDepartmentFigures::OVERVIEW], '--expired' => true]),
         );
 
         $figures = $read['value'];
@@ -129,9 +128,7 @@ class DepartmentStatistics
             EmployeeDataCache::departmentDetails($deptNo),
             self::DETAILS_TTL,
             fn () => $this->computeDetails($deptNo),
-            function () use ($deptNo): void {
-                RefreshDepartmentFigures::dispatch($deptNo)->afterResponse();
-            },
+            fn () => AfterResponse::artisan('departments:warm', ['--only' => [$deptNo], '--expired' => true]),
         );
 
         $figures = $read['value'] ?? [
@@ -424,11 +421,11 @@ class DepartmentStatistics
             ->where('dept_no', $deptNo)
             ->where('to_date', '<', self::CURRENT)
             ->groupByRaw('year(to_date)')
-        // Latest row by index order: MAX() no longer stops at the first index entry
-        // with the void_log_id condition.
             ->selectRaw('year(to_date) as year, count(*) as total')
             ->pluck('total', 'year');
 
+        // Latest row by index order: MAX() no longer stops at the first index entry
+        // with the void_log_id condition.
         $lastYear = (int) substr(max(
             (string) HistoryRows::active(DB::table('dept_emp'))->orderByDesc('from_date')->value('from_date'),
             (string) HistoryRows::active(DB::table('dept_emp'))->where('to_date', '<', self::CURRENT)->orderByDesc('to_date')->value('to_date'),

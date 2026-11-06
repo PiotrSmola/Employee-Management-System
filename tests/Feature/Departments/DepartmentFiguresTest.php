@@ -3,7 +3,6 @@
 namespace Tests\Feature\Departments;
 
 use App\Enums\Role;
-use App\Jobs\RefreshDepartmentFigures;
 use App\Models\Department;
 use App\Models\DeptEmp;
 use App\Models\DeptManager;
@@ -13,7 +12,7 @@ use App\Support\EmployeeDataCache;
 use App\Support\FigureCache;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 use Tests\Concerns\ActsAsAdmin;
@@ -83,13 +82,13 @@ class DepartmentFiguresTest extends TestCase
         $this->get(route('departments.index'))->assertOk();
         $this->get(route('departments.show', $this->dev))->assertOk();
         EmployeeDataCache::flush();
-        Bus::fake();
+        Artisan::spy();
 
         $this->get(route('departments.index'))->assertOk();
         $this->get(route('departments.show', $this->dev))->assertOk();
 
-        Bus::assertDispatchedAfterResponse(RefreshDepartmentFigures::class, fn ($job) => $job->deptNo === null);
-        Bus::assertDispatchedAfterResponse(RefreshDepartmentFigures::class, fn ($job) => $job->deptNo === 'd005');
+        Artisan::shouldHaveReceived('call')->with('departments:warm', ['--only' => ['overview'], '--expired' => true]);
+        Artisan::shouldHaveReceived('call')->with('departments:warm', ['--only' => ['d005'], '--expired' => true]);
     }
 
     public function test_a_targeted_flush_keeps_the_overview_and_the_other_departments(): void
@@ -158,8 +157,20 @@ class DepartmentFiguresTest extends TestCase
         $this->assertTrue(Cache::lock(FigureCache::lockKey(EmployeeDataCache::departmentDetails('d005')), 60)->get());
 
         $this->artisan('departments:warm')
-            ->expectsOutput('d005: skipped, already being computed')
+            ->expectsOutput('d005: skipped, fresh or already being computed')
             ->expectsOutput('d007: refreshed')
+            ->assertSuccessful();
+    }
+
+    public function test_the_warm_command_can_refresh_only_what_expired(): void
+    {
+        $this->artisan('departments:warm')->assertSuccessful();
+        EmployeeDataCache::flush(['d005']);
+
+        $this->artisan('departments:warm', ['--only' => ['d005', 'd007'], '--expired' => true])
+            ->doesntExpectOutputToContain('overview')
+            ->expectsOutput('d005: refreshed')
+            ->expectsOutput('d007: skipped, fresh or already being computed')
             ->assertSuccessful();
     }
 

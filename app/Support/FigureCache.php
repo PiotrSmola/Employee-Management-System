@@ -13,15 +13,24 @@ use Illuminate\Support\Str;
  *
  *  - stampede: one compute at a time, per key. Others wait briefly, then get
  *    FigureCache::PREPARING instead of hanging ({@see read()}).
- *  - stale write-back: the fresh value lives under a key that contains a
- *    generation; {@see invalidate()} changes the generation, so a compute that
- *    started before the invalidation writes to a key nobody reads.
+ *  - stale write-back: an entry remembers the generation it was computed for;
+ *    {@see invalidate()} changes the generation, so a compute that started before
+ *    the invalidation cannot make the figures fresh again.
  *  - cold cost: the last good value stays available for a week, so a reader
  *    gets it at once ({@see STALE}) and the refresh runs after its response.
+ *
+ * A key has exactly one cache entry, stale or fresh, replaced by every compute.
+ * The file store only deletes expired entries when they are read, so this keeps
+ * the number of files at the number of keys, however often the data changes.
  *
  *   ['value' => $figures, 'status' => $status] = FigureCache::read($key, 900, $compute, $refreshLater);
  *   FigureCache::invalidate($key);                     // the data changed
  *   FigureCache::refresh($key, 900, $compute);         // scheduled warming
+ *
+ * $version (optional, on read(), refresh() and isFresh()) is what else the value
+ * depends on: when it changes the value is no longer fresh, the stale copy stays.
+ * Reports pass the version of all reports, plus the day for the current state,
+ * instead of invalidating an unbounded number of keys one by one.
  */
 final class FigureCache
 {
@@ -46,26 +55,26 @@ final class FigureCache
      * @param  Closure(): void  $refreshLater  called when the stale value is returned
      * @return array{value: mixed, status: string}
      */
-    public static function read(string $key, int $ttl, Closure $compute, Closure $refreshLater): array
+    public static function read(string $key, int $ttl, Closure $compute, Closure $refreshLater, string $version = ''): array
     {
-        $fresh = Cache::get(self::freshKey($key));
-        if ($fresh !== null) {
-            return ['value' => $fresh, 'status' => self::FRESH];
-        }
+        $entry = Cache::get(self::entryKey($key));
 
-        $stale = Cache::get(self::staleKey($key));
-        if ($stale !== null) {
+        if ($entry !== null) {
+            if (self::entryIsFresh($entry, $key, $version)) {
+                return ['value' => $entry['value'], 'status' => self::FRESH];
+            }
+
             $refreshLater();
 
-            return ['value' => $stale['value'], 'status' => self::STALE];
+            return ['value' => $entry['value'], 'status' => self::STALE];
         }
 
         try {
-            return Cache::lock(self::lockKey($key), self::LOCK_SECONDS)->block(self::WAIT_SECONDS, function () use ($key, $ttl, $compute) {
+            return Cache::lock(self::lockKey($key), self::LOCK_SECONDS)->block(self::WAIT_SECONDS, function () use ($key, $ttl, $compute, $version) {
                 // Another process may have finished while this one waited for the lock.
-                $fresh = Cache::get(self::freshKey($key));
+                $entry = Cache::get(self::entryKey($key));
 
-                return ['value' => $fresh ?? self::compute($key, $ttl, $compute), 'status' => self::FRESH];
+                return ['value' => $entry !== null ? $entry['value'] : self::compute($key, $ttl, $compute, $version), 'status' => self::FRESH];
             });
         } catch (LockTimeoutException) {
             return ['value' => null, 'status' => self::PREPARING];
@@ -79,7 +88,7 @@ final class FigureCache
      * @param  Closure(): mixed  $compute
      * @return bool was the value computed?
      */
-    public static function refresh(string $key, int $ttl, Closure $compute, bool $onlyWhenExpired = false): bool
+    public static function refresh(string $key, int $ttl, Closure $compute, bool $onlyWhenExpired = false, string $version = ''): bool
     {
         $lock = Cache::lock(self::lockKey($key), self::LOCK_SECONDS);
 
@@ -88,11 +97,11 @@ final class FigureCache
         }
 
         try {
-            if ($onlyWhenExpired && self::isFresh($key)) {
+            if ($onlyWhenExpired && self::isFresh($key, $version)) {
                 return false;
             }
 
-            self::compute($key, $ttl, $compute);
+            self::compute($key, $ttl, $compute, $version);
 
             return true;
         } finally {
@@ -109,9 +118,11 @@ final class FigureCache
         Cache::forever(self::generationKey($key), Str::random(12));
     }
 
-    public static function isFresh(string $key): bool
+    public static function isFresh(string $key, string $version = ''): bool
     {
-        return Cache::has(self::freshKey($key));
+        $entry = Cache::get(self::entryKey($key));
+
+        return $entry !== null && self::entryIsFresh($entry, $key, $version);
     }
 
     /**
@@ -122,34 +133,41 @@ final class FigureCache
         return $key.':lock';
     }
 
-    private static function compute(string $key, int $ttl, Closure $compute): mixed
+    private static function compute(string $key, int $ttl, Closure $compute, string $version): mixed
     {
-        $generation = self::generation($key);
+        $generation = self::generation($key, $version);
         $value = $compute();
 
-        Cache::put($key.':fresh:'.$generation, $value, $ttl);
-
-        // A compute overtaken by invalidate() must not replace a newer stale copy.
-        if (self::generation($key) === $generation) {
-            Cache::put(self::staleKey($key), ['value' => $value], self::STALE_TTL);
+        // A compute overtaken by invalidate() must not replace a newer copy. Its generation
+        // is out of date, so stored in an empty slot the value only counts as stale.
+        if (self::generation($key, $version) === $generation || ! Cache::has(self::entryKey($key))) {
+            Cache::put(self::entryKey($key), [
+                'value' => $value,
+                'generation' => $generation,
+                'fresh_until' => now()->getTimestamp() + $ttl,
+            ], self::STALE_TTL);
         }
 
         return $value;
     }
 
-    private static function generation(string $key): string
+    /**
+     * @param  array{value: mixed, generation: string, fresh_until: int}  $entry
+     */
+    private static function entryIsFresh(array $entry, string $key, string $version): bool
     {
-        return (string) Cache::get(self::generationKey($key), '0');
+        return $entry['generation'] === self::generation($key, $version)
+            && $entry['fresh_until'] > now()->getTimestamp();
     }
 
-    private static function freshKey(string $key): string
+    private static function generation(string $key, string $version): string
     {
-        return $key.':fresh:'.self::generation($key);
+        return Cache::get(self::generationKey($key), '0').':'.$version;
     }
 
-    private static function staleKey(string $key): string
+    private static function entryKey(string $key): string
     {
-        return $key.':stale';
+        return $key.':figure';
     }
 
     private static function generationKey(string $key): string

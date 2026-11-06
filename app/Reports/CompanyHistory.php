@@ -16,7 +16,7 @@ final class CompanyHistory
     public static function earliestHireDate(): ?string
     {
         return Cache::remember(
-            EmployeeDataCache::report('earliest_hire'),
+            EmployeeDataCache::REPORTS_EARLIEST_HIRE,
             ReportCache::TTL,
             fn () => DB::table('employees')->min('hire_date')
         );

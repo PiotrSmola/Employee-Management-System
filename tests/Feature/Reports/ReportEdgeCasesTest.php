@@ -272,7 +272,7 @@ class ReportEdgeCasesTest extends TestCase
 
         $tables = collect(DB::getQueryLog())->pluck('query')->filter(fn (string $q) => preg_match('/dept_emp|salaries|titles/', $q));
         $this->assertSame([], $tables->values()->all());
-        $this->assertFalse(Cache::has(ReportCache::key('salary_snapshot', $this->context(asOf: '1950-06-30'))));
+        $this->assertFalse($this->figureIsCached('salary_snapshot', $this->context(asOf: '1950-06-30')));
     }
 
     public function test_the_first_hire_date_is_flushed_with_the_reports(): void
@@ -319,11 +319,12 @@ class ReportEdgeCasesTest extends TestCase
     public function test_the_current_state_is_cached_per_day(): void
     {
         $this->buildReportData();
-        $today = ReportCache::key('snapshot', $this->context());
+        $today = ReportCache::version($this->context());
 
         $this->travel(1)->days();
 
-        $this->assertNotSame($today, ReportCache::key('snapshot', $this->context()));
+        $this->assertNotSame($today, ReportCache::version($this->context()));
+        $this->assertSame(ReportCache::version($this->context(asOf: '1995-12-31')), EmployeeDataCache::reportsVersion(), 'History does not depend on today.');
     }
 
     public function test_a_viewer_gets_no_csv_at_all(): void

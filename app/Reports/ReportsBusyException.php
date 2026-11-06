@@ -6,8 +6,8 @@ use Illuminate\Http\Response;
 use RuntimeException;
 
 /**
- * A figure is not cached and another request is computing one: the visitor is
- * asked to come back instead of starting a second expensive computation.
+ * A figure was never computed and another process is computing it: the visitor
+ * is asked to come back instead of waiting (see ReportCache).
  */
 final class ReportsBusyException extends RuntimeException
 {

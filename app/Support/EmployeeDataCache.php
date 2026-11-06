@@ -33,12 +33,15 @@ final class EmployeeDataCache
     public const DEPARTMENTS_OVERVIEW = 'departments_overview';
 
     /**
-     * Current namespace of the cached reports (App\Reports). Report keys embed it,
-     * so forgetting it (flush()) retires every cached report at once - for any
-     * department, scope and as-of date - without listing them; the old entries
-     * simply expire.
+     * Current version of the cached reports (App\Reports\ReportCache). A report figure
+     * is fresh for one version, so forgetting it (flush()) retires every cached report
+     * at once - for any department, scope and as-of date - without listing them,
+     * and their last good copies stay available in FigureCache.
      */
     public const REPORTS_VERSION = 'reports:version';
+
+    /** First hire date of the company (App\Reports\CompanyHistory). */
+    public const REPORTS_EARLIEST_HIRE = 'reports:earliest_hire';
 
     /** Dashboard totals of a manager's department. */
     public static function departmentStats(string $deptNo): string
@@ -65,15 +68,15 @@ final class EmployeeDataCache
     }
 
     /**
-     * Key of a cached report figure: reports:<version>:<name>:<part>:<part>...
+     * Key of a cached report figure: reports:<name>:<part>:<part>...
      * e.g. report('snapshot', 'all', 'current') or report('salary_snapshot', 'mgr-d005', '1995-12-31').
      */
     public static function report(string $name, string ...$parts): string
     {
-        return implode(':', ['reports', self::reportsVersion(), $name, ...$parts]);
+        return implode(':', ['reports', $name, ...$parts]);
     }
 
-    /** The current reports namespace (created on first use and after every flush). */
+    /** The current reports version (created on first use and after every flush). */
     public static function reportsVersion(): string
     {
         $version = Cache::get(self::REPORTS_VERSION);
@@ -92,6 +95,7 @@ final class EmployeeDataCache
     public static function flushReports(): void
     {
         Cache::forget(self::REPORTS_VERSION);
+        Cache::forget(self::REPORTS_EARLIEST_HIRE);
     }
 
     /**
@@ -106,7 +110,7 @@ final class EmployeeDataCache
         $departments ??= self::allDepartments();
 
         // Reports cover every department (company-wide figures, histories), so any flush retires them.
-        $keys = [self::DASHBOARD_STATS, self::EMPLOYEES_BY_DEPARTMENT, self::JOB_TITLES, self::REPORTS_VERSION];
+        $keys = [self::DASHBOARD_STATS, self::EMPLOYEES_BY_DEPARTMENT, self::JOB_TITLES, self::REPORTS_VERSION, self::REPORTS_EARLIEST_HIRE];
 
         foreach ($departments as $deptNo) {
             $keys[] = self::departmentStats($deptNo);
