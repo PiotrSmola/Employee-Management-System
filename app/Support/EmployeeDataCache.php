@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Models\Department;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 
 /**
  * Cache keys of figures derived from the employee data (dashboard, filter
@@ -12,6 +13,7 @@ use Illuminate\Support\Facades\Cache;
  * dashboard and the filters do not show stale data until the TTL runs out.
  *
  * Readers build their keys with the methods below, so the list stays complete.
+ * Reports use a versioned namespace instead of single keys (report()).
  */
 final class EmployeeDataCache
 {
@@ -20,6 +22,14 @@ final class EmployeeDataCache
 
     /** Company-wide employees per department (DashboardService). */
     public const EMPLOYEES_BY_DEPARTMENT = 'employees_by_department';
+
+    /**
+     * Current namespace of the cached reports (App\Reports). Report keys embed it,
+     * so forgetting it (flush()) retires every cached report at once - for any
+     * department, scope and as-of date - without listing them; the old entries
+     * simply expire.
+     */
+    public const REPORTS_VERSION = 'reports:version';
 
     /** Dashboard totals of a manager's department. */
     public static function departmentStats(string $deptNo): string
@@ -40,6 +50,27 @@ final class EmployeeDataCache
     }
 
     /**
+     * Key of a cached report figure: reports:<version>:<name>:<part>:<part>...
+     * e.g. report('snapshot', 'all', 'current') or report('salary_snapshot', 'mgr-d005', '1995-12-31').
+     */
+    public static function report(string $name, string ...$parts): string
+    {
+        return implode(':', ['reports', self::reportsVersion(), $name, ...$parts]);
+    }
+
+    /** The current reports namespace (created on first use and after every flush). */
+    public static function reportsVersion(): string
+    {
+        return (string) Cache::rememberForever(self::REPORTS_VERSION, fn () => Str::lower(Str::random(8)));
+    }
+
+    /** Retire every cached report, keep the other figures. */
+    public static function flushReports(): void
+    {
+        Cache::forget(self::REPORTS_VERSION);
+    }
+
+    /**
      * Every key, for all departments (or only $departments) - company-wide keys always.
      *
      * @param  string[]|null  $departments
@@ -49,7 +80,8 @@ final class EmployeeDataCache
     {
         $departments ??= [...Department::query()->pluck('dept_no')->all(), EmployeeVisibility::NO_DEPARTMENT];
 
-        $keys = [self::DASHBOARD_STATS, self::EMPLOYEES_BY_DEPARTMENT];
+        // Reports cover every department (company-wide figures, histories), so any flush retires them.
+        $keys = [self::DASHBOARD_STATS, self::EMPLOYEES_BY_DEPARTMENT, self::REPORTS_VERSION];
 
         foreach ($departments as $deptNo) {
             $keys[] = self::departmentStats($deptNo);
