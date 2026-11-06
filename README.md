@@ -444,7 +444,7 @@ InnoDB buffer pool (`php artisan serve`). The Docker setup has 1 GB, so these ar
 
 The first-visit column is what the precomputing avoids: on the first start and then hourly the
 figures are computed ahead of the visitors. `php artisan departments:warm` takes 25 s for all
-departments, `php artisan reports:warm` about 4 minutes for all 19 scopes (the company, each
+departments, `php artisan reports:warm` about 5 minutes for all 19 scopes (the company, each
 department, each manager's department). Only a report for a month nobody asked for before
 is computed in the request. Department salary figures are read from the `(to_date, salary)`
 index instead of through each employee's salary history.
@@ -462,7 +462,8 @@ while the total is reused for a minute.
 The role restrictions do not change this: a viewer's list (salary data stripped) renders like an
 administrator's. A manager's list is the department filter on their department (0.6-1 s for the
 largest one, d005 with ~77k current and former employees; its total is counted on `dept_emp`
-alone).
+alone). The first visit takes 4-12 s longer: the job titles of the filter are then computed and
+cached for the department.
 
 ## Running Tests
 
