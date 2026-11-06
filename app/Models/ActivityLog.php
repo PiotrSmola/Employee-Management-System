@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 
 /**
  * One audit log entry - written by App\Services\AuditLogger, never updated.
@@ -16,7 +17,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string|null $subject_id emp_no / dept_no / user id
  * @property array<string, mixed>|null $changes {"before": {...}, "after": {...}} or a payload
  * @property string|null $ip
- * @property \Illuminate\Support\Carbon $created_at
+ * @property Carbon $created_at
  */
 class ActivityLog extends Model
 {

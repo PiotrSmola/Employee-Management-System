@@ -14,8 +14,7 @@ class ExportController extends Controller
     public function __construct(
         private readonly EmployeeExportService $exports,
         private readonly QueuedExportService $queued,
-    ) {
-    }
+    ) {}
 
     /**
      * Bulk export of the directory selection (route behind `can:export-data`).

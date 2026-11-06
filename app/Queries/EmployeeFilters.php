@@ -25,8 +25,7 @@ final class EmployeeFilters
         public readonly int|float|null $salaryMax = null,
         public readonly string $sortBy = 'emp_no',
         public readonly string $sortDirection = 'asc',
-    ) {
-    }
+    ) {}
 
     /**
      * Build from loosely typed input (request data or Livewire properties).

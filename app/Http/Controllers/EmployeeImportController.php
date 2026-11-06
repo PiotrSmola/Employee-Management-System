@@ -22,9 +22,7 @@ use Throwable;
  */
 class EmployeeImportController extends Controller
 {
-    public function __construct(private readonly EmployeeImportService $imports)
-    {
-    }
+    public function __construct(private readonly EmployeeImportService $imports) {}
 
     public function create(): View
     {

@@ -7,10 +7,12 @@ use App\Enums\Role;
 use App\Models\ActivityLog;
 use App\Models\Department;
 use App\Models\Employee;
+use App\Queries\EmployeeSearchQuery;
 use App\Services\EmployeeExportService;
 use DateTimeInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\View;
+use OpenSpout\Common\Entity\Cell;
 use OpenSpout\Reader\XLSX\Reader;
 use Tests\Concerns\ActsAsAdmin;
 use Tests\Concerns\BuildsDirectory;
@@ -31,7 +33,7 @@ class XlsxExportAndColumnsTest extends TestCase
     /**
      * Read the first sheet of an XLSX file: list of rows (cell values), plus the cells themselves.
      *
-     * @return array{0: array<int, array<int, mixed>>, 1: array<int, array<int, \OpenSpout\Common\Entity\Cell>>}
+     * @return array{0: array<int, array<int, mixed>>, 1: array<int, array<int, Cell>>}
      */
     private function readXlsx(string $path): array
     {
@@ -245,7 +247,7 @@ class XlsxExportAndColumnsTest extends TestCase
         // Direct use of the service as for a user without view-salaries (the endpoint is gated).
         $path = tempnam(sys_get_temp_dir(), 'x');
         $service = new EmployeeExportService;
-        $rows = $service->writeFile(ExportFormat::Xlsx, \App\Queries\EmployeeSearchQuery::make([]), $service->columns(false, 'emp_no,salary,earnings'), $path, 10);
+        $rows = $service->writeFile(ExportFormat::Xlsx, EmployeeSearchQuery::make([]), $service->columns(false, 'emp_no,salary,earnings'), $path, 10);
 
         [$values] = $this->readXlsx($path);
         $this->assertSame(7, $rows);

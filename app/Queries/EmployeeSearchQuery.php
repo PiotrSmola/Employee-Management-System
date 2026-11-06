@@ -2,6 +2,7 @@
 
 namespace App\Queries;
 
+use App\Support\EmployeeVisibility;
 use Closure;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -58,9 +59,7 @@ class EmployeeSearchQuery
     /** Up to this many matches, one query ordered by a per-employee sort key is cheapest. */
     private const SMALL_RESULT = 20000;
 
-    public function __construct(private readonly EmployeeFilters $filters)
-    {
-    }
+    public function __construct(private readonly EmployeeFilters $filters) {}
 
     /**
      * @param  EmployeeFilters|array<string, mixed>  $filters
@@ -508,7 +507,7 @@ class EmployeeSearchQuery
      * Selecting `de_f.emp_no` gives each member exactly once.
      *
      * This is the definition of "employee of a department" used by the
-     * department filter and by the manager scope ({@see \App\Support\EmployeeVisibility}).
+     * department filter and by the manager scope ({@see EmployeeVisibility}).
      */
     public static function departmentMembership(Builder $deptEmp, string $deptNo, string $status = 'all', bool $perRowLastCheck = false): Builder
     {

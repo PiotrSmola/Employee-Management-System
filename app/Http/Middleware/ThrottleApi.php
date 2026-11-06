@@ -15,9 +15,7 @@ use Symfony\Component\HttpFoundation\Response;
  */
 class ThrottleApi
 {
-    public function __construct(private readonly ThrottleRequests $throttle)
-    {
-    }
+    public function __construct(private readonly ThrottleRequests $throttle) {}
 
     public function handle(Request $request, Closure $next): Response
     {

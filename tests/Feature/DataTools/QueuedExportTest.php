@@ -8,7 +8,13 @@ use App\Jobs\GenerateExport;
 use App\Models\ActivityLog;
 use App\Models\Export;
 use App\Models\User;
+use App\Queries\EmployeeFilters;
+use App\Queries\EmployeeSearchQuery;
+use App\Services\EmployeeExportService;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use OpenSpout\Reader\XLSX\Reader;
@@ -148,7 +154,7 @@ class QueuedExportTest extends TestCase
         $manager = $this->signInAs(Role::Manager, $this->alpha);
         $export = $this->requestExport(['department' => $this->omega->dept_no, 'columns' => 'emp_no,salary']);
 
-        (new GenerateExport($export->id))->handle(app(\App\Services\EmployeeExportService::class));
+        (new GenerateExport($export->id))->handle(app(EmployeeExportService::class));
 
         $export->refresh();
         $rows = $this->csvRows($export);
@@ -163,7 +169,7 @@ class QueuedExportTest extends TestCase
         $export = $this->requestExport();
         $this->user->update(['role' => Role::Viewer]);
 
-        (new GenerateExport($export->id))->handle(app(\App\Services\EmployeeExportService::class));
+        (new GenerateExport($export->id))->handle(app(EmployeeExportService::class));
 
         $export->refresh();
         $this->assertSame(Export::STATUS_FAILED, $export->status);
@@ -178,7 +184,7 @@ class QueuedExportTest extends TestCase
         $export = $this->requestExport();
         $this->user->update(['is_active' => false]);
 
-        (new GenerateExport($export->id))->handle(app(\App\Services\EmployeeExportService::class));
+        (new GenerateExport($export->id))->handle(app(EmployeeExportService::class));
 
         $this->assertSame(Export::STATUS_FAILED, $export->refresh()->status);
     }
@@ -187,9 +193,9 @@ class QueuedExportTest extends TestCase
     {
         Queue::fake();
         $export = $this->requestExport();
-        \Illuminate\Support\Facades\DB::table('employees')->delete();
+        DB::table('employees')->delete();
 
-        (new GenerateExport($export->id))->handle(app(\App\Services\EmployeeExportService::class));
+        (new GenerateExport($export->id))->handle(app(EmployeeExportService::class));
 
         $export->refresh();
         $this->assertSame(Export::STATUS_FAILED, $export->status);
@@ -201,9 +207,9 @@ class QueuedExportTest extends TestCase
         Queue::fake();
         $export = $this->requestExport();
 
-        $this->app->instance(\App\Services\EmployeeExportService::class, new class extends \App\Services\EmployeeExportService
+        $this->app->instance(EmployeeExportService::class, new class extends EmployeeExportService
         {
-            public function writeFile(ExportFormat $format, \App\Queries\EmployeeSearchQuery $query, array $columns, string $path, int $pdfLimit): int
+            public function writeFile(ExportFormat $format, EmployeeSearchQuery $query, array $columns, string $path, int $pdfLimit): int
             {
                 file_put_contents($path, 'partial');
 
@@ -211,7 +217,7 @@ class QueuedExportTest extends TestCase
             }
         });
 
-        (new GenerateExport($export->id))->handle(app(\App\Services\EmployeeExportService::class));
+        (new GenerateExport($export->id))->handle(app(EmployeeExportService::class));
 
         $export->refresh();
         $this->assertSame(Export::STATUS_FAILED, $export->status);
@@ -238,11 +244,11 @@ class QueuedExportTest extends TestCase
         $export = $this->requestExport();
         $export->delete();
 
-        (new GenerateExport($export->id))->handle(app(\App\Services\EmployeeExportService::class));
+        (new GenerateExport($export->id))->handle(app(EmployeeExportService::class));
         $this->assertSame([], Storage::disk('local')->allFiles('exports'));
 
         $done = Export::factory()->for($this->user)->completed('exports/keep.csv')->create();
-        (new GenerateExport($done->id))->handle(app(\App\Services\EmployeeExportService::class));
+        (new GenerateExport($done->id))->handle(app(EmployeeExportService::class));
         $this->assertSame('exports/keep.csv', $done->refresh()->file_path);
     }
 
@@ -505,16 +511,16 @@ class QueuedExportTest extends TestCase
     public function test_a_failed_direct_xlsx_export_leaves_no_temporary_file(): void
     {
         $before = glob(sys_get_temp_dir().'/xlsx*') ?: [];
-        $query = new class(new \App\Queries\EmployeeFilters) extends \App\Queries\EmployeeSearchQuery
+        $query = new class(new EmployeeFilters) extends EmployeeSearchQuery
         {
-            public function rowsFor(array $ids): \Illuminate\Support\Collection
+            public function rowsFor(array $ids): Collection
             {
                 throw new RuntimeException('database gone');
             }
         };
 
         try {
-            (new \App\Services\EmployeeExportService)->xlsx($query, true, null, [1, 2]);
+            (new EmployeeExportService)->xlsx($query, true, null, [1, 2]);
             $this->fail('The error must not be swallowed.');
         } catch (RuntimeException $e) {
             $this->assertSame('database gone', $e->getMessage());
@@ -525,7 +531,7 @@ class QueuedExportTest extends TestCase
 
     public function test_prune_is_scheduled_daily(): void
     {
-        $events = collect(app(\Illuminate\Console\Scheduling\Schedule::class)->events())
+        $events = collect(app(Schedule::class)->events())
             ->filter(fn ($event) => str_contains($event->command ?? '', 'exports:prune'));
 
         $this->assertCount(1, $events);

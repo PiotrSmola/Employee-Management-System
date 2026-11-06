@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Enums\ExportFormat;
+use App\Jobs\GenerateExport;
 use App\Queries\EmployeeSearchQuery;
 use Barryvdh\DomPDF\Facade\Pdf;
 use DateTimeImmutable;
@@ -25,7 +26,7 @@ use Throwable;
  * {@see columns()}); the salary columns are only ever included with
  * `view-salaries`. The direct downloads (csv(), xlsx(), pdf()) are used for
  * small selections, the write*() methods by the queued export job
- * ({@see \App\Jobs\GenerateExport}) for large ones.
+ * ({@see GenerateExport}) for large ones.
  */
 class EmployeeExportService
 {

@@ -3,15 +3,18 @@
 namespace App\Models;
 
 use App\Enums\ExportFormat;
+use App\Jobs\GenerateExport;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Number;
 
 /**
- * A bulk export generated in the background ({@see \App\Jobs\GenerateExport}),
+ * A bulk export generated in the background ({@see GenerateExport}),
  * listed under "My exports". Only its owner can see, download or delete it.
  *
  * @property int $id
@@ -24,9 +27,9 @@ use Illuminate\Support\Number;
  * @property int|null $file_size bytes
  * @property int|null $row_count
  * @property string|null $error shown to the user (details are in the log)
- * @property \Illuminate\Support\Carbon|null $started_at
- * @property \Illuminate\Support\Carbon|null $finished_at
- * @property \Illuminate\Support\Carbon $created_at
+ * @property Carbon|null $started_at
+ * @property Carbon|null $finished_at
+ * @property Carbon $created_at
  */
 class Export extends Model
 {
@@ -86,7 +89,7 @@ class Export extends Model
         return (string) config('data_tools.exports.disk', 'local');
     }
 
-    public static function disk(): \Illuminate\Contracts\Filesystem\Filesystem
+    public static function disk(): Filesystem
     {
         return Storage::disk(self::diskName());
     }

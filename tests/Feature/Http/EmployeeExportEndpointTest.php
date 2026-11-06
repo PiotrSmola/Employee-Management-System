@@ -9,6 +9,7 @@ use App\Services\EmployeeExportService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\View;
+use Illuminate\Testing\TestResponse;
 use Tests\Concerns\ActsAsAdmin;
 use Tests\Concerns\BuildsDirectory;
 use Tests\TestCase;
@@ -33,7 +34,7 @@ class EmployeeExportEndpointTest extends TestCase
     /**
      * POST the export and return [response, parsed rows without the header, raw content].
      *
-     * @return array{0: \Illuminate\Testing\TestResponse, 1: array<int, array<int, string>>, 2: string}
+     * @return array{0: TestResponse, 1: array<int, array<int, string>>, 2: string}
      */
     private function exportCsv(array $payload = []): array
     {
@@ -447,7 +448,7 @@ class EmployeeExportEndpointTest extends TestCase
     /**
      * Export a PDF with a PDF limit of 3 and return [response, data passed to the PDF view].
      *
-     * @return array{0: \Illuminate\Testing\TestResponse, 1: array<string, mixed>}
+     * @return array{0: TestResponse, 1: array<string, mixed>}
      */
     private function exportPdfWithLimitOfThree(array $payload): array
     {

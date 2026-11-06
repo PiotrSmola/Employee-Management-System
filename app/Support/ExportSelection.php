@@ -28,8 +28,7 @@ final class ExportSelection
         public readonly array $filters,
         public readonly bool $selectAll,
         public readonly array $ids,
-    ) {
-    }
+    ) {}
 
     public static function fromRequest(Request $request): self
     {
