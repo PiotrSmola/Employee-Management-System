@@ -274,13 +274,16 @@ The system uses the following core entities:
 - **Compensation** (`view-salaries`): average / median / minimum / maximum salary per
   department and per title, salary distribution, gender pay gap per department and title,
   average salary per year
-- **As-of date**: every report shows the state of the company on a chosen day (history rows
-  with `from_date <= day < to_date`); the yearly series end on that day
+- **As-of date**: every report shows the state of the company at the end of a chosen month
+  (history rows with `from_date <= day < to_date`); the yearly series end on that day
 - Department filter (admins, HR), Chart.js charts (light and dark mode), every report as a
   table and as a CSV download
 - Figures are cached (24 h, cleared by `EmployeeDataCache::flush()`) and precomputed by
   `php artisan reports:warm`, scheduled hourly - run the scheduler (`php artisan schedule:work`
   or a cron entry for `schedule:run`) in production
+- Requests compute uncached figures one at a time: while one runs, others that need an uncached
+  figure get a "try again" page (503 with `Retry-After`), cached reports stay available. Report
+  routes allow 60 requests per minute per user
 
 ### Export System
 - Individual employee PDF reports
@@ -310,11 +313,11 @@ single filters and sorts 0.1–0.6 s, combined filters up to ~2 s, full CSV expo
 300k employees ~50 s (streamed).
 
 Reports are served from the cache (about 0.1 s per page). A page whose figures are not cached
-yet computes them in the request: on the full dataset about 10 s for the company-wide workforce
-page and 20 s for the compensation page, 20-60 s for a department or a manager's scope and for
-other as-of dates, more while the database is busy (the default 128 MB InnoDB buffer pool is smaller
-than the dataset, so a larger pool helps most). `php artisan reports:warm` computes the current
-state of all scopes ahead of the visitors.
+yet computes them in the request: on the full dataset 5-11 s for a workforce page and 9-22 s for a
+compensation page on an idle server, several times that while the database is busy (the default
+128 MB InnoDB buffer pool is smaller than the dataset, so a larger pool helps most).
+`php artisan reports:warm` computes the current state of all scopes ahead of the visitors. Computing
+the company-wide compensation figures needs about 105 MB of PHP memory in total.
 
 The role restrictions do not change this: a viewer's list (salary data stripped) renders like an
 administrator's (~0.1–0.2 s). A manager's list is the department filter on their department

@@ -13,6 +13,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Exceptions;
 use Mockery\MockInterface;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
@@ -89,6 +90,7 @@ class WarmReportsCommandTest extends TestCase
 
     public function test_a_failing_scope_does_not_stop_the_others(): void
     {
+        Exceptions::fake();
         $this->partialMock(ReportCatalog::class, function (MockInterface $mock) {
             $mock->shouldReceive('warm')->times(5)->andReturnUsing(function (ReportContext $context) {
                 if ($context->scopeKey() === 'dept-d001') {
@@ -101,6 +103,7 @@ class WarmReportsCommandTest extends TestCase
             ->expectsOutputToContain('dept d001      failed: Disk full')
             ->expectsOutputToContain('Warmed 4 of 5 report scopes')
             ->assertFailed();
+        Exceptions::assertReported(RuntimeException::class);
     }
 
     public function test_fresh_recomputes_cached_figures(): void

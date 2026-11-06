@@ -159,12 +159,14 @@ New cached figures derived from employee data get a key method there and are add
 Reports (`App\Reports`) are cached per figure, department scope and as-of date under a
 versioned namespace instead of single keys: `reports:<version>:<figure>:<scope>:<as-of>`
 (`EmployeeDataCache::report()`, built by `App\Reports\ReportCache::key()`; scope `all`,
-`dept-<no>` or `mgr-<no>`, as-of `current` or `Y-m-d`). `flush()` forgets
+`dept-<no>` or `mgr-<no>`, as-of `current-<today>` or `Y-m-d`). `flush()` forgets
 `reports:version` (it is part of `keys()`), which retires every cached report at once;
 `EmployeeDataCache::flushReports()` does only that. Writers therefore need nothing extra.
 `php artisan reports:warm` (scheduled hourly in `routes/console.php`) recomputes the current
 state of the company, of every department and of every manager scope after a flush; options
 `--as-of=Y-m-d`, `--department=d005` (repeatable), `--fresh` (recompute cached figures too).
+Report code reads `dept_emp`, `titles` and `salaries` only through `App\Reports\ReportSources`,
+so a condition for all history rows belongs in `ReportSources::rowFilter()`.
 
 ## Tests
 
