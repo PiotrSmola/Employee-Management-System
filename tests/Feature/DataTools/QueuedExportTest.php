@@ -310,6 +310,12 @@ class QueuedExportTest extends TestCase
         Storage::disk('local')->assertExists('exports/other.csv');
     }
 
+    public function test_absurdly_long_ids_are_not_found(): void
+    {
+        $this->get('/exports/99999999999999999999999/download')->assertNotFound();
+        $this->delete('/account/tokens/99999999999999999999999')->assertNotFound();
+    }
+
     public function test_deleting_an_export_removes_its_file(): void
     {
         Storage::disk('local')->put('exports/1_x.csv', 'x');

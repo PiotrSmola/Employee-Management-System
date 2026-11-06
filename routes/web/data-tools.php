@@ -13,8 +13,8 @@ use Illuminate\Support\Facades\Route;
 
 Route::middleware('can:'.Ability::EXPORT_DATA)->prefix('exports')->name('exports.')->group(function () {
     Route::get('/', [MyExportsController::class, 'index'])->name('index');
-    Route::get('/{export}/download', [MyExportsController::class, 'download'])->whereNumber('export')->name('download');
-    Route::delete('/{export}', [MyExportsController::class, 'destroy'])->whereNumber('export')->name('destroy');
+    Route::get('/{export}/download', [MyExportsController::class, 'download'])->where('export', '[0-9]{1,18}')->name('download');
+    Route::delete('/{export}', [MyExportsController::class, 'destroy'])->where('export', '[0-9]{1,18}')->name('destroy');
 });
 
 Route::middleware('can:'.Ability::IMPORT_DATA)->prefix('employees/import')->name('employees.import.')->group(function () {
@@ -31,4 +31,4 @@ Route::middleware('can:'.Ability::IMPORT_DATA)->prefix('employees/import')->name
 Route::post('/account/tokens', [ApiTokenController::class, 'store'])
     ->middleware(['can:'.Ability::EXPORT_DATA, 'throttle:10,1'])
     ->name('account.tokens.store');
-Route::delete('/account/tokens/{token}', [ApiTokenController::class, 'destroy'])->whereNumber('token')->name('account.tokens.destroy');
+Route::delete('/account/tokens/{token}', [ApiTokenController::class, 'destroy'])->where('token', '[0-9]{1,18}')->name('account.tokens.destroy');

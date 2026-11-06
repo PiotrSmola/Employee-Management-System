@@ -62,7 +62,7 @@ services:
     restart: unless-stopped
     user: www-data
     entrypoint: ["php", "artisan"]
-    command: ["queue:work", "--tries=1", "--timeout=1800", "--sleep=3", "--max-time=3600"]
+    command: ["queue:work", "--tries=1", "--timeout=1800", "--sleep=3", "--max-time=3600", "--memory=512"]
     environment: *app-environment
     volumes:
       - exports-data:/var/www/html/storage/app/exports

@@ -92,7 +92,10 @@ class GenerateExport implements ShouldQueue
             return;
         } finally {
             // The worker process lives on: do not keep the PDF's memory limit for the next jobs.
-            ini_set('memory_limit', $memoryLimit);
+            // Best effort: PHP refuses a limit below the memory still in use, which must not fail
+            // a finished export (the worker restarts itself above its --memory limit anyway).
+            gc_collect_cycles();
+            @ini_set('memory_limit', $memoryLimit);
 
             if (! $isLocalDisk) {
                 @unlink($target);
