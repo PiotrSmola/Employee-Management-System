@@ -1,13 +1,14 @@
 <?php
 
+use App\Http\Controllers\ApiTokenController;
 use App\Http\Controllers\EmployeeImportController;
 use App\Http\Controllers\MyExportsController;
 use App\Support\Ability;
 use Illuminate\Support\Facades\Route;
 
 /*
-| Data tools: "My exports" (queued bulk exports) and the employee import.
-| Loaded inside the authenticated group of routes/web.php.
+| Data tools: "My exports" (queued bulk exports), the employee import and the
+| API tokens of "My account". Loaded inside the authenticated group of routes/web.php.
 */
 
 Route::middleware('can:'.Ability::EXPORT_DATA)->prefix('exports')->name('exports.')->group(function () {
@@ -24,3 +25,7 @@ Route::middleware('can:'.Ability::IMPORT_DATA)->prefix('employees/import')->name
     Route::post('/{token}', [EmployeeImportController::class, 'commit'])->whereUuid('token')->name('commit');
     Route::delete('/{token}', [EmployeeImportController::class, 'cancel'])->whereUuid('token')->name('cancel');
 });
+
+// Personal access tokens of the REST API (every user; a token acts with its owner's role).
+Route::post('/account/tokens', [ApiTokenController::class, 'store'])->middleware('throttle:10,1')->name('account.tokens.store');
+Route::delete('/account/tokens/{token}', [ApiTokenController::class, 'destroy'])->whereNumber('token')->name('account.tokens.destroy');

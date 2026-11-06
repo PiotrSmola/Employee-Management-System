@@ -115,6 +115,8 @@
                 </div>
             </div>
         </div>
+
+        @include('account.api-tokens')
     </main>
 
     @include('layouts.footer', ['fixedBottom' => false])

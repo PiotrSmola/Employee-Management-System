@@ -24,7 +24,8 @@ class RouteAndNavigationTest extends TestCase
     {
         $routes = collect(Route::getRoutes()->getRoutes())
             ->filter(fn (RoutingRoute $route) => str_starts_with($route->getActionName(), 'App\\'))
-            ->reject(fn (RoutingRoute $route) => in_array($route->getName(), self::PUBLIC_ROUTES, true));
+            ->reject(fn (RoutingRoute $route) => in_array($route->getName(), self::PUBLIC_ROUTES, true))
+            ->reject(fn (RoutingRoute $route) => str_starts_with($route->uri(), 'api/'));
 
         $this->assertNotEmpty($routes);
 
@@ -34,6 +35,23 @@ class RouteAndNavigationTest extends TestCase
             foreach (['auth', 'auth.session', 'active'] as $required) {
                 $this->assertContains($required, $middleware, "Route {$route->uri()} must be in the authenticated group.");
             }
+        }
+    }
+
+    public function test_every_api_route_requires_an_active_token_user_and_is_rate_limited(): void
+    {
+        $routes = collect(Route::getRoutes()->getRoutes())
+            ->filter(fn (RoutingRoute $route) => str_starts_with($route->uri(), 'api/'));
+
+        $this->assertNotEmpty($routes);
+
+        foreach ($routes as $route) {
+            $middleware = $route->gatherMiddleware();
+
+            $this->assertContains('auth:sanctum', $middleware, "API route {$route->uri()} needs a token.");
+            $this->assertContains(\App\Http\Middleware\EnsureTokenUserIsActive::class, $middleware, "API route {$route->uri()} needs the active check.");
+            $this->assertContains('throttle:api', $middleware, "API route {$route->uri()} must be rate limited.");
+            $this->assertStringStartsWith('api/v1/', $route->uri());
         }
     }
 

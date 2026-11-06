@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Laravel\Sanctum\HasApiTokens;
 
 /**
  * An application account (not an employee of the dataset).
@@ -22,7 +23,8 @@ use Illuminate\Notifications\Notifiable;
  */
 class User extends Authenticatable
 {
-    use HasFactory, Notifiable;
+    // HasApiTokens: personal access tokens of the REST API (they act with the user's role).
+    use HasApiTokens, HasFactory, Notifiable;
 
     protected $fillable = [
         'name',
