@@ -6,7 +6,6 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Models\ActivityLog;
 use App\Services\AuditLogger;
-use App\Support\SessionPasswordHash;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -28,10 +27,6 @@ class LoginController extends Controller
         $user = $request->authenticate();
 
         $request->session()->regenerate();
-
-        // Replace a password hash left in the session by a previous account,
-        // which would make auth.session sign the new user out (see SessionPasswordHash).
-        SessionPasswordHash::store($request, $user, 'web');
 
         // Not a profile change - keep updated_at as it is.
         $user->timestamps = false;

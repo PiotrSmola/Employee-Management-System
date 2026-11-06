@@ -115,12 +115,7 @@ class EmployeeExportService
                 'filters' => $query->filters(),
                 'withSalaries' => $withSalaries,
             ])
-                ->setPaper('A4', 'landscape')
-                ->setOptions([
-                    'isHtml5ParserEnabled' => true,
-                    'isPhpEnabled' => true,
-                    'defaultFont' => 'DejaVu Sans',
-                ]);
+                ->setPaper('A4', 'landscape');
 
             return $pdf->download('employees_selected_'.$selectedCount.'_'.date('Y-m-d_H-i-s').'.pdf');
         } catch (\Exception $e) {
