@@ -1,8 +1,4 @@
-{{-- Assign / end the department manager (manage-departments). Errors come in the bags of DepartmentManagementService. --}}
-@php
-    $assignErrors = $errors->getBag(App\Services\DepartmentManagementService::ASSIGN_BAG);
-    $endErrors = $errors->getBag(App\Services\DepartmentManagementService::END_BAG);
-@endphp
+{{-- Assign / end the department manager (manage-departments). Error bags: DepartmentManagementService::ASSIGN_BAG, END_BAG. --}}
 <div class="card mb-4">
     <div class="card-header">
         <h5 class="mb-0 text-body-emphasis"><i class="bi bi-person-plus me-2"></i>{{ __('Assign a manager') }}</h5>
@@ -11,7 +7,12 @@
         <p class="small text-body-secondary">
             {{ __('Choose a current employee of the department. The current manager\'s period ends on the effective date.') }}
         </p>
-        <form method="POST" action="{{ route('departments.managers.store', $department) }}" id="assignManagerForm" novalidate>
+        <form method="POST" action="{{ route('departments.managers.store', $department) }}" id="assignManagerForm" novalidate
+            data-no-results="{{ __('No current employee found') }}"
+            data-choose-first="{{ __('Choose an employee from the list.') }}"
+            data-since-label="{{ __('in the department since') }}"
+            data-role-current="{{ __('Current manager') }}"
+            data-role-former="{{ __('Former manager of this department') }}">
             @csrf
             <div class="mb-3 position-relative">
                 <label for="managerSearch" class="form-label fw-semibold">{{ __('Employee') }}</label>
@@ -20,14 +21,14 @@
                 <div class="input-group">
                     <span class="input-group-text"><i class="bi bi-search"></i></span>
                     <input type="text" id="managerSearch" autocomplete="off"
-                        class="form-control @if ($assignErrors->has('emp_no')) is-invalid @endif"
+                        class="form-control @error('emp_no', 'assignManager') is-invalid @enderror"
                         placeholder="{{ __('Name or employee number...') }}"
                         value="{{ old('emp_label') }}"
                         data-url="{{ route('departments.managers.candidates', $department) }}"
                         aria-describedby="managerSearchHelp">
-                    @if ($assignErrors->has('emp_no'))
-                        <div class="invalid-feedback">{{ $assignErrors->first('emp_no') }}</div>
-                    @endif
+                    @error('emp_no', 'assignManager')
+                        <div class="invalid-feedback">{{ $message }}</div>
+                    @enderror
                 </div>
                 <div id="managerResults" class="list-group position-absolute w-100 shadow d-none"
                     style="z-index: 1050; max-height: 280px; overflow-y: auto;"></div>
@@ -35,12 +36,12 @@
             </div>
             <div class="mb-3">
                 <label for="from_date" class="form-label fw-semibold">{{ __('Effective date') }}</label>
-                <input type="date" id="from_date" name="from_date" value="{{ old('from_date') }}" max="{{ now()->toDateString() }}"
-                    @if ($currentManager) min="{{ \Carbon\Carbon::parse($currentManager->from_date)->addDay()->toDateString() }}" @endif
-                    class="form-control @if ($assignErrors->has('from_date')) is-invalid @endif" required>
-                @if ($assignErrors->has('from_date'))
-                    <div class="invalid-feedback">{{ $assignErrors->first('from_date') }}</div>
-                @endif
+                <input type="date" id="from_date" name="from_date" value="{{ old('from_date') }}" max="{{ $today }}"
+                    min="{{ $earliestManagerChange }}"
+                    class="form-control @error('from_date', 'assignManager') is-invalid @enderror" required>
+                @error('from_date', 'assignManager')
+                    <div class="invalid-feedback">{{ $message }}</div>
+                @enderror
             </div>
             <button type="submit" class="btn btn-primary">
                 <i class="bi bi-check-lg me-1"></i>{{ __('Assign manager') }}
@@ -56,19 +57,19 @@
         </div>
         <div class="card-body">
             <p class="small text-body-secondary">
-                {{ __('Ends the period of :name without a successor; the department then has no manager.', ['name' => $currentManager->first_name . ' ' . $currentManager->last_name]) }}
+                {{ __('Ends the period of :name without a successor; the department then has no manager.', ['name' => $currentManager->name]) }}
             </p>
             <form method="POST" action="{{ route('departments.managers.end', $department) }}" novalidate
-                onsubmit="return confirm(@js(__('End the management of :name?', ['name' => $currentManager->first_name . ' ' . $currentManager->last_name])))">
+                onsubmit="return confirm(@js(__('End the management of :name?', ['name' => $currentManager->name])))">
                 @csrf
                 <div class="mb-3">
                     <label for="to_date" class="form-label fw-semibold">{{ __('End date') }}</label>
-                    <input type="date" id="to_date" name="to_date" value="{{ old('to_date') }}" max="{{ now()->toDateString() }}"
-                        min="{{ \Carbon\Carbon::parse($currentManager->from_date)->addDay()->toDateString() }}"
-                        class="form-control @if ($endErrors->has('to_date')) is-invalid @endif" required>
-                    @if ($endErrors->has('to_date'))
-                        <div class="invalid-feedback">{{ $endErrors->first('to_date') }}</div>
-                    @endif
+                    <input type="date" id="to_date" name="to_date" value="{{ old('to_date') }}" max="{{ $today }}"
+                        min="{{ $earliestManagerChange }}"
+                        class="form-control @error('to_date', 'endManagement') is-invalid @enderror" required>
+                    @error('to_date', 'endManagement')
+                        <div class="invalid-feedback">{{ $message }}</div>
+                    @enderror
                 </div>
                 <button type="submit" class="btn btn-outline-danger">
                     <i class="bi bi-person-dash me-1"></i>{{ __('End management') }}
@@ -78,89 +79,4 @@
     </div>
 @endif
 
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        const search = document.getElementById('managerSearch');
-        const results = document.getElementById('managerResults');
-        const empNo = document.getElementById('managerEmpNo');
-        const label = document.getElementById('managerLabel');
-        const form = document.getElementById('assignManagerForm');
-        const noResults = @json(__('No current employee found'));
-        const chooseFirst = @json(__('Choose an employee from the list.'));
-        const sinceLabel = @json(__('in the department since'));
-        const roleLabels = @json(['current' => __('Current manager'), 'former' => __('Former manager of this department')]);
-        let timer = null;
-        let pending = null;
-
-        const hide = () => results.classList.add('d-none');
-
-        const render = (rows) => {
-            results.replaceChildren();
-            if (rows.length === 0) {
-                const empty = document.createElement('div');
-                empty.className = 'list-group-item text-muted small';
-                empty.textContent = noResults;
-                results.append(empty);
-            }
-            rows.forEach(row => {
-                const item = document.createElement('button');
-                item.type = 'button';
-                item.className = 'list-group-item list-group-item-action';
-                const name = document.createElement('div');
-                name.className = 'fw-semibold';
-                name.textContent = row.name + ' (#' + row.emp_no + ')';
-                const meta = document.createElement('small');
-                meta.className = 'text-muted';
-                meta.textContent = [row.title, row.since ? sinceLabel + ' ' + row.since : null, roleLabels[row.manager]].filter(Boolean).join(' · ');
-                item.append(name, meta);
-                item.addEventListener('click', () => {
-                    empNo.value = row.emp_no;
-                    label.value = row.name + ' (#' + row.emp_no + ')';
-                    search.value = label.value;
-                    search.classList.remove('is-invalid');
-                    hide();
-                });
-                results.append(item);
-            });
-            results.classList.remove('d-none');
-        };
-
-        const load = () => {
-            // Only the latest search matters; typing cancels the one still running.
-            if (pending) {
-                pending.abort();
-            }
-            pending = new AbortController();
-
-            fetch(search.dataset.url + '?q=' + encodeURIComponent(search.value.trim()), {
-                headers: { 'Accept': 'application/json' },
-                credentials: 'same-origin',
-                signal: pending.signal
-            })
-                .then(response => response.ok ? response.json() : { data: [] })
-                .then(json => render(json.data || []))
-                .catch(error => { if (error.name !== 'AbortError') hide(); });
-        };
-
-        search.addEventListener('input', () => {
-            empNo.value = '';
-            label.value = '';
-            clearTimeout(timer);
-            timer = setTimeout(load, 250);
-        });
-        search.addEventListener('focus', () => { if (empNo.value === '') load(); });
-        search.addEventListener('keydown', event => { if (event.key === 'Escape') hide(); });
-        document.addEventListener('click', event => {
-            if (!results.contains(event.target) && event.target !== search) hide();
-        });
-        form.addEventListener('submit', event => {
-            if (empNo.value === '') {
-                event.preventDefault();
-                search.classList.add('is-invalid');
-                search.setCustomValidity(chooseFirst);
-                search.reportValidity();
-                search.setCustomValidity('');
-            }
-        });
-    });
-</script>
+<script src="{{ asset('js/department-manager-select.js') }}"></script>

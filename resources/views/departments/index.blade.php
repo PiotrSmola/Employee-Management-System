@@ -78,10 +78,10 @@
                                         {{-- Above the card's stretched link. --}}
                                         <a href="{{ route('employees.show', $department->manager->emp_no) }}"
                                             class="fw-semibold position-relative" style="z-index: 2;">
-                                            {{ $department->manager->first_name }} {{ $department->manager->last_name }}
+                                            {{ $department->manager->name }}
                                         </a>
                                         <span class="text-muted">
-                                            {{ __('since :date', ['date' => \Carbon\Carbon::parse($department->manager->from_date)->format('d.m.Y')]) }}
+                                            {{ __('since :date', ['date' => $department->manager->from]) }}
                                         </span>
                                     @else
                                         <span class="text-muted fst-italic">{{ __('No current manager') }}</span>

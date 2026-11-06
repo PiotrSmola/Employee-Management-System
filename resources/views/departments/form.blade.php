@@ -1,4 +1,3 @@
-@php($editing = $department->exists)
 @include('layouts.html')
 @include('layouts.head', ['pageTitle' => ($editing ? __('Rename department') : __('New department')) . ' - Employee Management System'])
 

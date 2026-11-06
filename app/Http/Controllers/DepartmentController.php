@@ -4,8 +4,10 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\Departments\DepartmentRequest;
 use App\Models\Department;
+use App\Presenters\DepartmentPresenter;
 use App\Services\DepartmentManagementService;
 use App\Services\DepartmentStatistics;
+use App\Support\Ability;
 use App\Support\EmployeeVisibility;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -22,6 +24,7 @@ class DepartmentController extends Controller
     public function __construct(
         private readonly DepartmentStatistics $statistics,
         private readonly DepartmentManagementService $departments,
+        private readonly DepartmentPresenter $presenter,
     ) {
     }
 
@@ -35,7 +38,7 @@ class DepartmentController extends Controller
             ->get(['dept_no', 'dept_name']);
 
         return view('departments.index', [
-            ...$this->statistics->overview($departments, $visibility),
+            ...$this->presenter->overview($this->statistics->overview($departments, $visibility)),
             'canSeeSalaries' => $visibility->canSeeSalaries(),
             'isDepartmentScoped' => $visibility->isDepartmentScoped(),
         ]);
@@ -46,13 +49,15 @@ class DepartmentController extends Controller
         $this->authorize('view', $department);
 
         $visibility = EmployeeVisibility::for($request->user());
+
         return view('departments.show', [
             'department' => $department,
             'canSeeSalaries' => $visibility->canSeeSalaries(),
+            'canManage' => $request->user()->can(Ability::MANAGE_DEPARTMENTS),
             'deletionBlocked' => $request->user()->can('delete', $department)
                 ? $this->departments->deletionBlockedReason($department)
                 : null,
-            ...$this->statistics->details($department, $visibility),
+            ...$this->presenter->page($this->statistics->details($department, $visibility)),
         ]);
     }
 
@@ -60,6 +65,7 @@ class DepartmentController extends Controller
     {
         return view('departments.form', [
             'department' => new Department(['dept_no' => $this->nextCode()]),
+            'editing' => false,
         ]);
     }
 
@@ -73,7 +79,7 @@ class DepartmentController extends Controller
 
     public function edit(Department $department): View
     {
-        return view('departments.form', ['department' => $department]);
+        return view('departments.form', ['department' => $department, 'editing' => true]);
     }
 
     public function update(DepartmentRequest $request, Department $department): RedirectResponse

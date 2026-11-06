@@ -1,11 +1,3 @@
-@php
-    $date = fn (?string $value) => $value === null || $value === '9999-01-01' ? __('Present') : \Carbon\Carbon::parse($value)->format('d.m.Y');
-    $person = fn (object $row) => $row->first_name . ' ' . $row->last_name;
-    $figuresReady = $figuresStatus !== App\Support\FigureCache::PREPARING;
-    $male = $gender['M'];
-    $female = $gender['F'];
-    $people = max(1, $male + $female);
-@endphp
 @include('layouts.html')
 @include('layouts.head', ['pageTitle' => $department->dept_name . ' - ' . __('Departments')])
 
@@ -41,9 +33,9 @@
                                         @if ($currentManager->hidden)
                                             <span class="fst-italic">{{ __('outside your department') }}</span>
                                         @else
-                                            <a href="{{ route('employees.show', $currentManager->emp_no) }}" class="text-white fw-semibold">{{ $person($currentManager) }}</a>
+                                            <a href="{{ route('employees.show', $currentManager->emp_no) }}" class="text-white fw-semibold">{{ $currentManager->name }}</a>
                                         @endif
-                                        ({{ __('since :date', ['date' => $date($currentManager->from_date)]) }})
+                                        ({{ __('since :date', ['date' => $currentManager->from]) }})
                                     @else
                                         <span class="fst-italic">{{ __('none') }}</span>
                                     @endif
@@ -95,7 +87,7 @@
                 <div class="card gradient-card-3 text-white h-100">
                     <div class="card-body text-center">
                         <i class="bi bi-gender-ambiguous display-5 mb-2 opacity-75"></i>
-                        <h3 class="fw-bold">{{ round($female / $people * 100) }}% / {{ round($male / $people * 100) }}%</h3>
+                        <h3 class="fw-bold">{{ $femalePercent }}% / {{ $malePercent }}%</h3>
                         <p class="mb-0 opacity-90">
                             {{ __('Women / men') }}
                             <small>({{ number_format($female) }} / {{ number_format($male) }})</small>
@@ -135,14 +127,15 @@
                 <div class="card h-100">
                     <div class="card-header">
                         <h5 class="mb-0"><i class="bi bi-bar-chart me-2 text-primary"></i>{{ __('Headcount by year') }}</h5>
-                        <p class="mb-0 text-muted small">@if ($headcountByYear->isNotEmpty())
-                                {{ __('Assignments in the department at the end of each year, up to the last year with data (:year)', ['year' => $headcountByYear->last()['year']]) }}
-                            @endif</p>
+                        @if ($lastDataYear)
+                            <p class="mb-0 text-muted small">{{ __('Assignments in the department at the end of each year, up to the last year with data (:year)', ['year' => $lastDataYear]) }}</p>
+                        @endif
                     </div>
                     <div class="card-body">
                         @if ($headcountByYear->isNotEmpty())
                             <div style="position: relative; height: 300px;">
-                                <canvas id="headcountChart"></canvas>
+                                <canvas id="headcountChart" data-rows="{{ $headcountByYear->toJson() }}"
+                                    data-label="{{ __('Employees') }}" data-year-label="{{ __('Year') }}"></canvas>
                             </div>
                         @else
                             <p class="text-muted text-center my-5">{{ __('No employees yet') }}</p>
@@ -161,7 +154,7 @@
                                 <div class="flex-grow-1">
                                     <div class="fw-semibold">{{ $title->title }}</div>
                                     <div class="progress mt-1" style="height: 5px;">
-                                        <div class="progress-bar" style="width: {{ $headcount > 0 ? ($title->total / $headcount) * 100 : 0 }}%"></div>
+                                        <div class="progress-bar" style="width: {{ $title->share }}%"></div>
                                     </div>
                                 </div>
                                 <span class="badge bg-info text-dark ms-3">{{ number_format($title->total) }}</span>
@@ -174,10 +167,10 @@
             </div>
         </div>
 
-                @endif
+        @endif
 
         <div class="row g-4 mb-4">
-            <div class="{{ auth()->user()->can('manage-departments') ? 'col-lg-7' : 'col-12' }}">
+            <div class="{{ $canManage ? 'col-lg-7' : 'col-12' }}">
                 <div class="card h-100">
                     <div class="card-header">
                         <h5 class="mb-0"><i class="bi bi-person-badge me-2 text-primary"></i>{{ __('Managers') }}</h5>
@@ -193,19 +186,18 @@
                                 </thead>
                                 <tbody>
                                     @forelse ($managerHistory as $manager)
-                                        @php($isCurrent = $manager->to_date === '9999-01-01')
-                                        <tr class="{{ $isCurrent ? 'table-info' : '' }}">
+                                        <tr class="{{ $manager->isCurrent ? 'table-info' : '' }}">
                                             <td>
                                                 @if ($manager->hidden)
                                                     <span class="fst-italic text-muted">{{ __('A manager outside your department') }}</span>
                                                 @else
-                                                    <a href="{{ route('employees.show', $manager->emp_no) }}" class="fw-semibold">{{ $person($manager) }}</a>
+                                                    <a href="{{ route('employees.show', $manager->emp_no) }}" class="fw-semibold">{{ $manager->name }}</a>
                                                     <small class="text-muted d-block">#{{ $manager->emp_no }}</small>
                                                 @endif
                                             </td>
                                             <td>
-                                                {{ $date($manager->from_date) }} &ndash; {{ $date($manager->to_date) }}
-                                                @if ($isCurrent)
+                                                {{ $manager->from }} &ndash; {{ $manager->to }}
+                                                @if ($manager->isCurrent)
                                                     <small class="text-success fw-semibold d-block"><i class="bi bi-check-circle me-1"></i>{{ __('Current manager') }}</small>
                                                 @endif
                                             </td>
@@ -230,10 +222,7 @@
 
         @if ($figuresReady)
         <div class="row g-4">
-            @foreach ([
-                ['title' => __('Recently joined'), 'icon' => 'box-arrow-in-right', 'rows' => $recentJoiners, 'joined' => true],
-                ['title' => __('Recently left'), 'icon' => 'box-arrow-right', 'rows' => $recentLeavers, 'joined' => false],
-            ] as $list)
+            @foreach ($recentLists as $list)
                 <div class="col-lg-6">
                     <div class="card h-100">
                         <div class="card-header">
@@ -246,24 +235,14 @@
                                         @if ($row->hidden)
                                             <span class="fst-italic text-muted">{{ __('Employee moved to another department') }}</span>
                                         @else
-                                            <a href="{{ route('employees.show', $row->emp_no) }}" class="fw-semibold">{{ $person($row) }}</a>
+                                            <a href="{{ route('employees.show', $row->emp_no) }}" class="fw-semibold">{{ $row->name }}</a>
                                         @endif
                                         <small class="text-muted d-block">
-                                            <i class="bi bi-calendar3 me-1"></i>{{ $date($row->date) }}
+                                            <i class="bi bi-calendar3 me-1"></i>{{ $row->dateLabel }}
                                         </small>
                                     </div>
-                                    @if ($row->hidden)
-
-                                        {{-- Nothing that identifies the person or where they went. --}}
-
-                                    @elseif ($list['joined'])
-                                        <span class="badge {{ $row->hired ? 'text-bg-success' : 'text-bg-primary' }} role-badge">
-                                            {{ $row->hired ? __('Hired') : __('Transferred in') }}
-                                        </span>
-                                    @elseif ($row->moved_to)
-                                        <span class="badge text-bg-primary role-badge">{{ __('Moved to :name', ['name' => $row->moved_to]) }}</span>
-                                    @else
-                                        <span class="badge text-bg-secondary role-badge">{{ __('Left the company') }}</span>
+                                    @if ($row->badge)
+                                        <span class="badge {{ $row->badgeClass }} role-badge">{{ $row->badge }}</span>
                                     @endif
                                 </div>
                             @empty
@@ -281,42 +260,7 @@
 
     @if ($headcountByYear->isNotEmpty())
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-        <script>
-            document.addEventListener('DOMContentLoaded', function() {
-                const rows = @json($headcountByYear);
-
-                new Chart(document.getElementById('headcountChart'), {
-                    type: 'bar',
-                    data: {
-                        labels: rows.map(row => row.year.toString()),
-                        datasets: [{
-                            label: @json(__('Employees')),
-                            data: rows.map(row => row.headcount),
-                            backgroundColor: 'rgba(102, 126, 234, 0.7)',
-                            borderColor: '#667eea',
-                            borderWidth: 1,
-                            borderRadius: 4
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: { display: false }
-                        },
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                ticks: { callback: value => value.toLocaleString() }
-                            },
-                            x: {
-                                title: { display: true, text: @json(__('Year')) }
-                            }
-                        }
-                    }
-                });
-            });
-        </script>
+        <script src="{{ asset('js/department-headcount-chart.js') }}"></script>
     @endif
 </body>
 

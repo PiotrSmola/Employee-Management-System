@@ -81,7 +81,7 @@
             </div>
         </div>
 
-        @include('departments.partials.employee-profile')
+        <x-department-management :employee="$employee" />
 
         <div class="row g-3 mb-4 justify-content-center">
             @if ($canSeeSalaries)
