@@ -359,12 +359,7 @@ class EmployeeExportService
             'columns' => $columns,
             'labels' => ['emp_no' => 'Emp #'] + array_map(fn ($key) => __(self::COLUMNS[$key][0]), array_combine($columns, $columns)),
         ])
-            ->setPaper('A4', 'landscape')
-            ->setOptions([
-                'isHtml5ParserEnabled' => true,
-                'isPhpEnabled' => true,
-                'defaultFont' => 'DejaVu Sans',
-            ]);
+            ->setPaper('A4', 'landscape');
     }
 
     /**

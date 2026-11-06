@@ -1,6 +1,6 @@
 # Employee Management System
 
-A comprehensive web-based employee management platform built with Laravel 11, designed to handle employee data, departments, salaries, and job titles with advanced reporting capabilities.
+A comprehensive web-based employee management platform built with Laravel 12, designed to handle employee data, departments, salaries, and job titles with advanced reporting capabilities.
 
 ## Features
 
@@ -28,18 +28,17 @@ A comprehensive web-based employee management platform built with Laravel 11, de
 
 ## Technology Stack
 
-- **Framework**: Laravel 11.x
-- **PHP**: 8.2+
+- **Framework**: Laravel 12.x
+- **PHP**: 8.3+
 - **Database**: MySQL 8.0+ (the directory queries use MySQL optimizer hints and the index migration builds indexes online with `ALGORITHM=INPLACE`; other databases are not supported)
 - **Frontend**: Bootstrap 5, Blade templating
 - **PDF Generation**: Laravel DomPDF
-- **Interactive Components**: Livewire 3.5
-- **Query Building**: Spatie Laravel Query Builder
+- **Interactive Components**: Livewire 3.8
 - **Development Tools**: Laravel Sail, Pint (code formatting)
 
 ## Requirements
 
-- PHP 8.2 or higher
+- PHP 8.3 or higher
 - Composer
 - Node.js & NPM (for asset compilation)
 - MySQL 8.0+
@@ -153,6 +152,7 @@ APP_DEBUG=false
 ADMIN_EMAIL=you@your-company.com
 ADMIN_PASSWORD=<a long, unique password>   # or leave empty and read the generated one from the log
 SEED_DEMO_USERS=false
+SESSION_SECURE_COOKIE=true                 # when served over HTTPS (the session cookie is then HTTPS only)
 ```
 
 Behind a reverse proxy / load balancer configure the trusted proxies
@@ -384,7 +384,7 @@ etc. switches the role); the authorization rules are covered in `tests/Feature/A
 
 Tests need the Composer **dev** dependencies (PHPUnit, Faker, …). The Docker app image is
 built with `composer install --no-dev`, so `docker compose exec app php artisan test`
-does not work. Run them with a local PHP 8.2+ / Composer against the Docker MySQL:
+does not work. Run them with a local PHP 8.3+ / Composer against the Docker MySQL:
 
 ```bash
 composer install
@@ -395,6 +395,40 @@ DB_HOST=127.0.0.1 DB_PORT=<FORWARD_DB_PORT> DB_USERNAME=root DB_PASSWORD=root ph
 
 Any other MySQL 8 server works the same way – set the `DB_*` variables (environment
 variables take precedence over `phpunit.xml` / `.env.testing`).
+
+## Security
+
+### Dependency check
+
+`composer audit` compares the installed packages with the public security advisories:
+
+```bash
+composer audit
+# without a local PHP / Composer (reads composer.lock only):
+docker run --rm -v "$PWD":/app -w /app composer:2 audit --locked
+```
+
+It has to report no advisories. Update policy:
+
+- Run it before every release and whenever `composer.lock` changes, at least once a month.
+- Critical and high advisories are fixed right away, the others with the next release.
+- An advisory that cannot be fixed yet is listed here with the reason and the planned fix.
+- Stay on a Laravel version that still gets security fixes. Laravel 12 gets them until
+  February 2027; plan the upgrade to the next major version before that.
+- Update with `composer update`, then run the test suite. Keep `composer.lock` committed.
+- CDN files are pinned to an exact version with an `integrity` hash
+  (`resources/views/layouts/head.blade.php`, `layouts/chartjs.blade.php`). A new version needs a
+  new hash: `curl -sL <url> | openssl dgst -sha384 -binary | openssl base64 -A`.
+
+### Protections in the application
+
+- `App\Http\Middleware\SecurityHeaders` sets the security headers on every response. Its
+  Content-Security-Policy allows inline scripts and `eval` (inline `onclick` handlers, Livewire's
+  Alpine), so it does not stop an inline script; it limits where pages load from and send data
+  to. Inline handlers have to move to `public/js` before a stricter policy is possible.
+- Sessions are encrypted (`SESSION_ENCRYPT`), the cookie is `HttpOnly` and `SameSite=Lax`.
+  Set `SESSION_SECURE_COOKIE=true` when the site is served over HTTPS.
+- PDFs are rendered without PHP, JavaScript or remote files (`config/dompdf.php`).
 
 ## API Endpoints
 
@@ -419,7 +453,7 @@ The application provides the following main routes:
 Adjust cache settings in `config/cache.php` for production environments.
 
 ### PDF Settings
-Configure PDF generation options in the DomPDF service provider.
+PDF generation options live in `config/dompdf.php`. Remote files, PHP and JavaScript are disabled there; exports must not replace them with `setOptions()` (a single `setOption()` is fine).
 
 ### Database Optimization
 For large datasets, consider:

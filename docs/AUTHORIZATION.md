@@ -129,8 +129,7 @@ department filter).
 - Administrators cannot delete, deactivate or change the role of their own account, and there is
   always at least one active administrator (`App\Services\UserManagementService`).
 - Changing or resetting a password signs out the user's other sessions and invalidates
-  "remember me" cookies (`auth.session` middleware, new remember token; see
-  `App\Support\SessionPasswordHash` for the framework detail this relies on).
+  "remember me" cookies (`auth.session` middleware, new remember token).
 - Login is rate limited: 5 failed attempts per e-mail + IP and 20 per IP per minute. An unknown
   e-mail costs a password hash check like a known one, and "account deactivated" is only reported
   after a correct password – responses do not reveal which accounts exist. Behind a proxy,
