@@ -278,10 +278,9 @@ The system uses the following core entities:
   rename, delete (only a department that never had employees, managers or manager accounts).
   *Assign manager*: a current employee of the department (searchable) and an effective date - the
   current manager's period ends on that date, the new one starts on it; the date must be after
-  the current manager's start, not before the employee joined the department and not in the
-  future. *End management* closes the current period without a successor. `dept_manager` keeps one
-  period per employee and department, so a former manager cannot manage the same department
-  again. Every change is in the audit log (`department.*`) and clears the cached figures.
+  the current manager's start and not before the end of the last ended period, not before the
+  employee joined the department and not in the future. *End management* closes the current period
+  without a successor. A former manager cannot (yet) manage the same department again. Every change is in the audit log (`department.*`) and clears the cached figures.
 - **Employee profile**: the manager of the employee's current department and a badge with the
   employee's own management periods.
 

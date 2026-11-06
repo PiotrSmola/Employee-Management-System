@@ -105,8 +105,9 @@ class DepartmentManagementService
      *
      * Rules: the employee is currently in the department and was already in it
      * on $fromDate, is not the current manager, has no earlier management
-     * period in this department (one row per employee and department), and
-     * $fromDate is after the current manager's start date.
+     * period in this department ({@see reappointmentBlockingPeriod()}), and
+     * $fromDate is after the current manager's start date and not before the
+     * end of the department's last ended period.
      *
      * @return array{emp_no: int, from_date: string, previous_emp_no: ?int}
      *
@@ -137,8 +138,7 @@ class DepartmentManagementService
                 $fail('emp_no', __('The employee already is the current manager.'));
             }
 
-            $earlier = DB::table('dept_manager')->where('emp_no', $empNo)->where('dept_no', $department->dept_no)->first();
-            if ($earlier !== null) {
+            if (($earlier = $this->reappointmentBlockingPeriod($department->dept_no, $empNo)) !== null) {
                 $fail('emp_no', __('The employee already managed this department (:from - :to); the history keeps one period per employee and department.', [
                     'from' => $earlier->from_date, 'to' => $earlier->to_date,
                 ]));
@@ -150,6 +150,15 @@ class DepartmentManagementService
 
             if ($current !== null && $fromDate <= $current->from_date) {
                 $fail('from_date', __('The date must be after the start of the current manager\'s period (:date).', ['date' => $current->from_date]));
+            }
+
+            // Periods must not overlap: a new one starts at the earliest when the last ended one ended.
+            $lastEnd = DB::table('dept_manager')
+                ->where('dept_no', $department->dept_no)
+                ->where('to_date', '<>', self::CURRENT)
+                ->max('to_date');
+            if ($lastEnd !== null && $fromDate < $lastEnd) {
+                $fail('from_date', __('The date cannot be before the end of the previous manager\'s period (:date).', ['date' => $lastEnd]));
             }
 
             if ($current !== null) {
@@ -216,6 +225,24 @@ class DepartmentManagementService
         EmployeeDataCache::flush([$department->dept_no]);
 
         return $result;
+    }
+
+    /**
+     * The rule "a former manager cannot manage the same department again": the
+     * employee's latest earlier management period of the department, or null.
+     *
+     * Needed while dept_manager's primary key is (emp_no, dept_no) - a second
+     * period would not fit. Once the key includes from_date this method can
+     * simply return null; the other rules (dates after the current and the last
+     * ended period) keep the history consistent.
+     */
+    private function reappointmentBlockingPeriod(string $deptNo, int $empNo): ?object
+    {
+        return DB::table('dept_manager')
+            ->where('emp_no', $empNo)
+            ->where('dept_no', $deptNo)
+            ->orderByDesc('from_date')
+            ->first();
     }
 
     /**

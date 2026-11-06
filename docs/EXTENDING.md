@@ -163,9 +163,12 @@ New cached figures derived from employee data get a key method there and are add
   `assignManager($department, $empNo, 'Y-m-d')`, `endManagement($department, 'Y-m-d')`): they
   validate, log `department.created|renamed|deleted|manager_assigned|manager_ended` and flush the
   cache. Callers check `manage-departments`.
-- `dept_manager` has one row per employee and department (primary key `emp_no, dept_no`); the
-  current manager has `to_date = 9999-01-01`. A change of manager on day D ends the old period
-  on D and starts the new one on D.
+- The current manager has `to_date = 9999-01-01`. A change of manager on day D ends the old
+  period on D and starts the new one on D; a new period never starts before the department's
+  last ended period. Rows are picked by their dates, not by `(emp_no, dept_no)`. While that pair is
+  `dept_manager`'s primary key, a former manager cannot manage the same department again; the
+  rule is in `DepartmentManagementService::reappointmentBlockingPeriod()` (return null once the key
+  includes `from_date`).
 - Code that moves a current department manager out of the department or terminates them
   should end the management too: `endManagement($department, $date)` (the date must be after
   the period's start).

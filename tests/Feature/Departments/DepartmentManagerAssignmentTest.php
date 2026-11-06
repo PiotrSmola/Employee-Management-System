@@ -163,9 +163,11 @@ class DepartmentManagerAssignmentTest extends TestCase
 
         $this->get(route('departments.show', $this->dev))->assertOk()->assertSee('none')->assertDontSee('End the management of');
 
-        // Without a current manager there is nothing to end; a new manager can start any day.
+        // Without a current manager there is nothing to end; a new period cannot start before the last one ended.
         $this->post(route('departments.managers.end', $this->dev), ['to_date' => '2001-01-01'])
             ->assertSessionHasErrorsIn(DepartmentManagementService::END_BAG, 'to_date');
+        $this->post(route('departments.managers.store', $this->dev), ['emp_no' => $this->engineer->emp_no, 'from_date' => '2000-06-01'])
+            ->assertSessionHasErrorsIn(self::BAG, 'from_date');
         $this->post(route('departments.managers.store', $this->dev), ['emp_no' => $this->engineer->emp_no, 'from_date' => '2001-01-01'])
             ->assertSessionHasNoErrors();
         $this->assertNull(ActivityLog::query()->where('action', 'department.manager_assigned')->sole()->changes['previous_emp_no']);
