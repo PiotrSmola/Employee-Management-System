@@ -22,8 +22,7 @@ final class ReportPage
         public readonly ReportContext $context,
         public readonly array $summary,
         public readonly array $departments,
-    ) {
-    }
+    ) {}
 
     public function isCompensation(): bool
     {

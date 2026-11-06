@@ -21,9 +21,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  */
 class ReportController extends Controller
 {
-    public function __construct(private readonly ReportCatalog $catalog)
-    {
-    }
+    public function __construct(private readonly ReportCatalog $catalog) {}
 
     public function index(Request $request): RedirectResponse
     {

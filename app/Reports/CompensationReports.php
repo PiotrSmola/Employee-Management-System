@@ -31,8 +31,7 @@ class CompensationReports
     public function __construct(
         private readonly ReportCache $cache,
         private readonly ReportLabels $labels,
-    ) {
-    }
+    ) {}
 
     public function table(string $key, ReportContext $context): ReportTable
     {

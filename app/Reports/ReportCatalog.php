@@ -18,8 +18,7 @@ class ReportCatalog
     public function __construct(
         private readonly WorkforceReports $workforce,
         private readonly CompensationReports $compensation,
-    ) {
-    }
+    ) {}
 
     public function has(string $key): bool
     {

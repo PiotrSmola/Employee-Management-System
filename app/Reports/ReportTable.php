@@ -32,8 +32,7 @@ final class ReportTable
         public readonly array $totals = [],
         public readonly array $charts = [],
         public readonly ?string $description = null,
-    ) {
-    }
+    ) {}
 
     public function isEmpty(): bool
     {

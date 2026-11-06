@@ -29,8 +29,7 @@ final class ReportContext
         public readonly ?string $department,
         public readonly CarbonImmutable $asOf,
         public readonly bool $current,
-    ) {
-    }
+    ) {}
 
     public static function make(EmployeeVisibility $visibility, ?string $department = null, ?CarbonImmutable $asOf = null): self
     {
