@@ -75,6 +75,12 @@
                     <i class="bi bi-list-ul me-2"></i>
                     {{ $isDepartmentScoped ? __('Browse Your Employees') : 'Browse All Employees' }}
                 </a>
+                @can('view-reports')
+                    <a href="{{ route('reports.index') }}" class="btn btn-outline-primary btn-lg me-3 mb-3">
+                        <i class="bi bi-bar-chart me-2"></i>
+                        {{ __('Reports & Analytics') }}
+                    </a>
+                @endcan
             </div>
         </div>
 
