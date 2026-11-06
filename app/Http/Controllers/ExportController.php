@@ -51,6 +51,13 @@ class ExportController extends Controller
         if (count($ids) > $directLimit) {
             $export = $this->queued->queue($request->user(), $format, $selection, $columns);
 
+            if ($export === null) {
+                return back()->with('error', __(
+                    'You already have :max exports in progress. Wait until one of them has finished (see My exports).',
+                    ['max' => (int) config('data_tools.exports.max_active_per_user', 3)],
+                ));
+            }
+
             return redirect()->route('exports.index')->with('status', __(
                 'Your :format export is being prepared. It will be listed here when it is ready (export #:id).',
                 ['format' => $format->label(), 'id' => $export->id],

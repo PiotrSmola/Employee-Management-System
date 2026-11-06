@@ -16,6 +16,7 @@ use OpenSpout\Writer\XLSX\Writer as XlsxWriter;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use Throwable;
 
 /**
  * Bulk CSV / XLSX / PDF export of the employee directory.
@@ -154,7 +155,14 @@ class EmployeeExportService
         }
 
         $path = tempnam(sys_get_temp_dir(), 'xlsx');
-        $this->writeXlsxIds($path, $query, $ids, $columns);
+
+        try {
+            $this->writeXlsxIds($path, $query, $ids, $columns);
+        } catch (Throwable $e) {
+            @unlink($path);
+
+            throw $e;
+        }
 
         return (new BinaryFileResponse($path, 200, ['Content-Type' => ExportFormat::Xlsx->mimeType()]))
             ->setContentDisposition('attachment', $this->filename(ExportFormat::Xlsx, count($ids)))
@@ -254,28 +262,31 @@ class EmployeeExportService
     {
         $writer = new XlsxWriter(new XlsxOptions(tempFolder: sys_get_temp_dir()));
         $writer->openToFile($path);
-        $writer->getCurrentSheet()->setName(__('Employees'));
 
-        $writer->addRow(Row::fromValuesWithStyle($this->header($columns), (new Style)->withFontBold(true)));
+        try {
+            $writer->getCurrentSheet()->setName(__('Employees'));
+            $writer->addRow(Row::fromValuesWithStyle($this->header($columns), (new Style)->withFontBold(true)));
 
-        $dateStyle = (new Style)->withFormat('yyyy-mm-dd');
-        $moneyStyle = (new Style)->withFormat('#,##0.00');
+            $dateStyle = (new Style)->withFormat('yyyy-mm-dd');
+            $moneyStyle = (new Style)->withFormat('#,##0.00');
 
-        $this->eachRow($query, $ids, $columns, function (object $employee, int|float|string $earnings) use ($writer, $columns, $dateStyle, $moneyStyle) {
-            $cells = [];
-            foreach ($this->xlsxRow($employee, $earnings, $columns) as $key => $value) {
-                $cells[] = match (true) {
-                    // Text is always a text cell: a name like "=1+2" must never become a formula.
-                    is_string($value) => new StringCell($value, null),
-                    $value instanceof DateTimeImmutable => Cell::fromValue($value, $dateStyle),
-                    in_array($key, ['salary', 'earnings'], true) && $value !== null => Cell::fromValue($value, $moneyStyle),
-                    default => Cell::fromValue($value),
-                };
-            }
-            $writer->addRow(new Row($cells));
-        });
-
-        $writer->close();
+            $this->eachRow($query, $ids, $columns, function (object $employee, int|float|string $earnings) use ($writer, $columns, $dateStyle, $moneyStyle) {
+                $cells = [];
+                foreach ($this->xlsxRow($employee, $earnings, $columns) as $key => $value) {
+                    $cells[] = match (true) {
+                        // Text is always a text cell: a name like "=1+2" must never become a formula.
+                        is_string($value) => new StringCell($value, null),
+                        $value instanceof DateTimeImmutable => Cell::fromValue($value, $dateStyle),
+                        in_array($key, ['salary', 'earnings'], true) && $value !== null => Cell::fromValue($value, $moneyStyle),
+                        default => Cell::fromValue($value),
+                    };
+                }
+                $writer->addRow(new Row($cells));
+            });
+        } finally {
+            // Also removes the writer's temporary files after an error.
+            $writer->close();
+        }
     }
 
     /**

@@ -27,20 +27,35 @@ return [
         // Generated files and their list entries are deleted after this many days
         // (`php artisan exports:prune`, scheduled daily).
         'retention_days' => (int) env('EXPORTS_RETENTION_DAYS', 7),
+
+        // Unfinished (queued or running) exports a user may have at the same time.
+        'max_active_per_user' => (int) env('EXPORTS_MAX_ACTIVE_PER_USER', 3),
+
+        // An export still waiting for a worker after this many hours is marked as failed by exports:prune.
+        'pending_timeout_hours' => (int) env('EXPORTS_PENDING_TIMEOUT_HOURS', 24),
     ],
 
     'imports' => [
-        // Data rows per file (the header row not counted) and upload size in kilobytes.
+        // Rows per file (data and blank rows, the header row not counted) and upload size in kilobytes.
         'max_rows' => (int) env('IMPORTS_MAX_ROWS', 5000),
         'max_file_kb' => (int) env('IMPORTS_MAX_FILE_KB', 5120),
+
+        // An XLSX file is a zip archive: its total unpacked size is checked before it is parsed.
+        'max_unpacked_kb' => (int) env('IMPORTS_MAX_UNPACKED_KB', 102400),
+
+        // Longer cells are cut off when reading (validation then rejects them); further columns are ignored.
+        'max_cell_length' => 200,
+        'max_columns' => 50,
 
         // How long a validated upload waits for its confirmation (minutes).
         'preview_ttl' => (int) env('IMPORTS_PREVIEW_TTL', 60),
     ],
 
     'api' => [
-        // Requests per minute and token (per IP address before authentication).
+        // Requests per minute per user (all tokens of a user share the limit), and per IP address
+        // for requests without a valid token.
         'rate_limit' => (int) env('API_RATE_LIMIT', 60),
+        'guest_rate_limit' => (int) env('API_GUEST_RATE_LIMIT', 30),
 
         'default_per_page' => 20,
         'max_per_page' => 100,

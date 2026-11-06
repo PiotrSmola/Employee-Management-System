@@ -370,17 +370,151 @@ class QueuedExportTest extends TestCase
         $disk->assertExists('exports/fresh-orphan.csv'); // a recent orphan may still be written
     }
 
-    public function test_prune_accepts_a_number_of_days(): void
+    public function test_prune_accepts_a_number_of_days_of_at_least_one(): void
     {
-        $export = Export::factory()->for($this->user)->create(['created_at' => now()->subDays(2)]);
+        $export = Export::factory()->for($this->user)->create(['status' => Export::STATUS_FAILED, 'created_at' => now()->subDays(2)]);
 
         $this->artisan('exports:prune', ['--days' => 3])->assertSuccessful();
         $this->assertModelExists($export);
 
+        $this->artisan('exports:prune', ['--days' => 0])->assertFailed();
+        $this->artisan('exports:prune', ['--days' => 'abc'])->assertFailed();
+        $this->assertModelExists($export);
+
         $this->artisan('exports:prune', ['--days' => 1])->assertSuccessful();
         $this->assertModelMissing($export);
+    }
 
-        $this->artisan('exports:prune', ['--days' => 'abc'])->assertFailed();
+    public function test_prune_never_deletes_unfinished_exports_or_their_files(): void
+    {
+        $disk = Storage::disk('local');
+        $running = Export::factory()->for($this->user)->create([
+            'status' => Export::STATUS_PROCESSING, 'started_at' => now()->subMinutes(5), 'created_at' => now()->subDays(30),
+        ]);
+        $waiting = Export::factory()->for($this->user)->create(['created_at' => now()->subHours(25)]);
+        $disk->put('exports/'.$running->id.'_abc.xlsx', 'being written');
+        touch($disk->path('exports/'.$running->id.'_abc.xlsx'), now()->subDays(30)->getTimestamp());
+
+        $this->artisan('exports:prune')->assertSuccessful();
+
+        $this->assertModelExists($running);
+        $this->assertModelExists($waiting);
+        $this->assertSame(Export::STATUS_PROCESSING, $running->refresh()->status);
+        $disk->assertExists('exports/'.$running->id.'_abc.xlsx');
+    }
+
+    public function test_prune_marks_stalled_exports_as_failed(): void
+    {
+        $overdue = Export::factory()->for($this->user)->create([
+            'status' => Export::STATUS_PROCESSING, 'started_at' => now()->subSeconds(GenerateExport::TIMEOUT + 601),
+        ]);
+        $running = Export::factory()->for($this->user)->create([
+            'status' => Export::STATUS_PROCESSING, 'started_at' => now()->subSeconds(GenerateExport::TIMEOUT + 100),
+        ]);
+        $forgotten = Export::factory()->for($this->user)->create(['created_at' => now()->subHours(25)]);
+        $waiting = Export::factory()->for($this->user)->create(['created_at' => now()->subHours(23)]);
+
+        $this->artisan('exports:prune')
+            ->expectsOutputToContain('Marked 2 stalled export(s) as failed.')
+            ->assertSuccessful();
+
+        $this->assertSame(Export::STATUS_FAILED, $overdue->refresh()->status);
+        $this->assertNotNull($overdue->error);
+        $this->assertNotNull($overdue->finished_at);
+        $this->assertSame(Export::STATUS_FAILED, $forgotten->refresh()->status);
+        $this->assertSame(Export::STATUS_PROCESSING, $running->refresh()->status);
+        $this->assertSame(Export::STATUS_PENDING, $waiting->refresh()->status);
+    }
+
+    // --------------------------------------------------------------- limits
+
+    public function test_the_number_of_unfinished_exports_per_user_is_limited(): void
+    {
+        Queue::fake();
+        Export::factory()->for($this->user)->count(2)->create();
+        Export::factory()->for($this->user)->create(['status' => Export::STATUS_PROCESSING]);
+        Export::factory()->for($this->user)->create(['status' => Export::STATUS_FAILED]);
+        Export::factory()->for(User::factory()->hr())->count(3)->create();
+
+        $this->from(route('employees.index'))
+            ->post(route('employees.export'), ['format' => 'csv', 'selectAll' => '1'])
+            ->assertRedirect(route('employees.index'))
+            ->assertSessionHas('error', 'You already have 3 exports in progress. Wait until one of them has finished (see My exports).');
+
+        Queue::assertNothingPushed();
+        $this->assertSame(4, Export::ownedBy($this->user)->count());
+        $this->assertSame(0, ActivityLog::where('action', 'data.exported')->count());
+    }
+
+    public function test_finished_exports_do_not_count_against_the_limit(): void
+    {
+        Queue::fake();
+        Export::factory()->for($this->user)->count(5)->create(['status' => Export::STATUS_FAILED]);
+
+        $this->requestExport();
+
+        Queue::assertPushed(GenerateExport::class, 1);
+    }
+
+    public function test_the_export_endpoint_is_rate_limited(): void
+    {
+        Queue::fake();
+        $payload = ['format' => 'csv', 'selectAll' => '0', 'selectedEmployees' => '1'];
+
+        for ($i = 0; $i < 10; $i++) {
+            $this->post(route('employees.export'), $payload)->assertOk();
+        }
+
+        $this->post(route('employees.export'), $payload)->assertStatus(429);
+    }
+
+    // -------------------------------------------------- files and audit
+
+    public function test_downloads_are_audited(): void
+    {
+        Storage::disk('local')->put('exports/7_abc.csv', 'x');
+        $export = Export::factory()->for($this->user)->completed('exports/7_abc.csv', 42)->create();
+
+        $this->get(route('exports.download', $export->id))->assertOk();
+
+        $entry = ActivityLog::where('action', 'data.export_downloaded')->sole();
+        $this->assertSame((string) $export->id, $entry->subject_id);
+        $this->assertSame($this->user->id, $entry->user_id);
+        $this->assertEquals(['format' => 'csv', 'rows' => 42], $entry->changes);
+    }
+
+    public function test_exports_on_a_non_local_disk_are_written_through_a_temporary_file(): void
+    {
+        config(['data_tools.exports.disk' => 'remote-exports']);
+        Storage::fake('remote-exports');
+
+        $export = $this->requestExport(['columns' => 'emp_no'])->refresh();
+
+        $this->assertSame(Export::STATUS_COMPLETED, $export->status);
+        Storage::disk('remote-exports')->assertExists($export->file_path);
+        $this->assertStringContainsString('Employee ID', Storage::disk('remote-exports')->get($export->file_path));
+        $this->assertSame(7, $export->row_count);
+    }
+
+    public function test_a_failed_direct_xlsx_export_leaves_no_temporary_file(): void
+    {
+        $before = glob(sys_get_temp_dir().'/xlsx*') ?: [];
+        $query = new class(new \App\Queries\EmployeeFilters) extends \App\Queries\EmployeeSearchQuery
+        {
+            public function rowsFor(array $ids): \Illuminate\Support\Collection
+            {
+                throw new RuntimeException('database gone');
+            }
+        };
+
+        try {
+            (new \App\Services\EmployeeExportService)->xlsx($query, true, null, [1, 2]);
+            $this->fail('The error must not be swallowed.');
+        } catch (RuntimeException $e) {
+            $this->assertSame('database gone', $e->getMessage());
+        }
+
+        $this->assertSame([], array_diff(glob(sys_get_temp_dir().'/xlsx*') ?: [], $before));
     }
 
     public function test_prune_is_scheduled_daily(): void

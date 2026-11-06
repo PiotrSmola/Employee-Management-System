@@ -26,11 +26,13 @@ class GenerateExport implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable;
 
+    /** Seconds; the worker's --timeout and the queue's retry_after must be larger (docker-compose.yml). */
+    public const TIMEOUT = 1800;
+
     /** A failed export is not retried; the user can start it again. */
     public int $tries = 1;
 
-    /** Seconds; the worker's --timeout and the queue's retry_after must be larger (docker-compose.yml). */
-    public int $timeout = 1800;
+    public int $timeout = self::TIMEOUT;
 
     public function __construct(public readonly int $exportId)
     {
@@ -70,8 +72,18 @@ class GenerateExport implements ShouldQueue
         $disk->makeDirectory($directory);
         $path = $directory.'/'.$export->id.'_'.Str::random(16).'.'.$export->format->extension();
 
+        // The writers need a local path: on another disk the file is written to a temporary file and copied.
+        $isLocalDisk = config('filesystems.disks.'.Export::diskName().'.driver') === 'local';
+        $target = $isLocalDisk ? $disk->path($path) : (string) tempnam(sys_get_temp_dir(), 'export');
+
         try {
-            $rows = $service->writeFile($export->format, $query, $columns, $disk->path($path), (int) config('data_tools.exports.queued_pdf_limit', 5000));
+            $rows = $service->writeFile($export->format, $query, $columns, $target, (int) config('data_tools.exports.queued_pdf_limit', 5000));
+
+            if (! $isLocalDisk && $rows > 0) {
+                $stream = fopen($target, 'r');
+                $disk->writeStream($path, $stream);
+                is_resource($stream) && fclose($stream);
+            }
         } catch (Throwable $e) {
             $disk->delete($path);
             report($e);
@@ -81,6 +93,10 @@ class GenerateExport implements ShouldQueue
         } finally {
             // The worker process lives on: do not keep the PDF's memory limit for the next jobs.
             ini_set('memory_limit', $memoryLimit);
+
+            if (! $isLocalDisk) {
+                @unlink($target);
+            }
         }
 
         if ($rows === 0) {

@@ -2,7 +2,9 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ActivityLog;
 use App\Models\Export;
+use App\Services\AuditLogger;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -30,6 +32,11 @@ class MyExportsController extends Controller
         $export = $this->own($request, $export);
 
         abort_unless($export->isDownloadable() && Export::disk()->exists($export->file_path), 404);
+
+        AuditLogger::log('data.export_downloaded', ActivityLog::SUBJECT_EXPORT, $export->id, [
+            'format' => $export->format->value,
+            'rows' => $export->row_count,
+        ], $request->user());
 
         return Export::disk()->download($export->file_path, $export->file_name, [
             'Content-Type' => $export->format->mimeType(),

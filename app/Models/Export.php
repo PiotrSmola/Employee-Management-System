@@ -39,6 +39,9 @@ class Export extends Model
 
     public const STATUS_FAILED = 'failed';
 
+    /** Not finished yet: never pruned, and counted against the per-user limit. */
+    public const ACTIVE_STATUSES = [self::STATUS_PENDING, self::STATUS_PROCESSING];
+
     protected $guarded = ['id'];
 
     protected $attributes = [
@@ -77,9 +80,14 @@ class Export extends Model
         return $this->status === self::STATUS_COMPLETED && $this->file_path !== null;
     }
 
+    public static function diskName(): string
+    {
+        return (string) config('data_tools.exports.disk', 'local');
+    }
+
     public static function disk(): \Illuminate\Contracts\Filesystem\Filesystem
     {
-        return Storage::disk(config('data_tools.exports.disk', 'local'));
+        return Storage::disk(self::diskName());
     }
 
     /**
