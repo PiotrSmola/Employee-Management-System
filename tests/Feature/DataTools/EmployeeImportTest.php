@@ -442,7 +442,7 @@ class EmployeeImportTest extends TestCase
 
         // The rows pass the validation, the dept_emp insert then fails on its foreign key
         // after the employees were inserted.
-        $this->app->instance(EmployeeImportService::class, new class extends EmployeeImportService
+        $this->app->instance(EmployeeImportService::class, new class(app(EmployeeNumberAllocator::class)) extends EmployeeImportService
         {
             public function validate(array $records): array
             {

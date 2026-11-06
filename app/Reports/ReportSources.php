@@ -96,8 +96,8 @@ final class ReportSources
     private static function join(Builder $query, string $table, string $alias, Closure $on, string $type): Builder
     {
         return $query->join($table.' as '.$alias, function (JoinClause $join) use ($on, $alias) {
-            $on($join);
             HistoryRows::active($join, $alias);
+            $on($join);
         }, type: $type);
     }
 }

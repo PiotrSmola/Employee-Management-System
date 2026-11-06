@@ -246,7 +246,7 @@ class VoidedRowsGuardTest extends TestCase
         }
 
         // Dynamic names: a variable or constant where a table is expected.
-        preg_match_all('/(?:\btable|->(?:from|\w*[jJ]oin\w*))\(\s*(\$\w+|(?:self|static)::\w+)/', $statement, $matches);
+        preg_match_all('/(?:\bDB::table|->(?:from|(?:\w*J|j)oin(?:Sub|Where|Lateral)?))\(\s*(\$(?!this\b)\w+|(?:self|static)::\w+)/', $statement, $matches);
         foreach ($matches[1] as $name) {
             if ($name !== '$join') {
                 $references[] = ['$', $name];

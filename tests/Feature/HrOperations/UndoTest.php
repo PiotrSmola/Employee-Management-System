@@ -340,7 +340,8 @@ class UndoTest extends HrOperationsTestCase
         $this->post(route('employees.transfer', $employee->emp_no), ['dept_no' => $sales->dept_no, 'effective_date' => '2024-05-01'])->assertSessionHasNoErrors();
         app(DepartmentManagementService::class)->assignManager($research, $successor->emp_no, '2024-05-01');
 
-        $this->undo($employee)->assertSessionHasErrorsIn('undo', ['undo' => 'The department got another manager after this change, so it cannot be undone any more.']);
+        $this->undo($employee, ActivityLog::where('action', 'employee.transferred')->sole()->id)
+            ->assertSessionHasErrorsIn('undo', ['undo' => 'The department got another manager after this change, so it cannot be undone any more.']);
 
         $this->assertSame(1, DB::table('dept_manager')->where('dept_no', $research->dept_no)->where('void_log_id', 0)->where('to_date', self::CURRENT)->count());
         $this->assertSame($sales->dept_no, $this->current('dept_emp', $employee->emp_no)->dept_no);

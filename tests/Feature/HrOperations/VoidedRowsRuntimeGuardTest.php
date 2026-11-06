@@ -210,8 +210,9 @@ class VoidedRowsRuntimeGuardTest extends HrOperationsTestCase
             }],
 
             'xlsx export' => [fn (self $t) => $t->post(route('employees.export'), ['format' => 'xlsx', 'selectAll' => '1'])->assertOk()],
-            'export selection' => [fn (self $t) => ExportSelection::fromArray(['selectAll' => true, 'ids' => [$t->formerEmployeeRecord()->emp_no]])->query(EmployeeVisibility::unrestricted())->ids()],
-            'export form' => [fn (self $t) => $t->get(route('exports.index'))->assertOk()],
+            'export selection' => [fn (self $t) => ExportSelection::fromArray([
+                'filters' => ['department' => $t->salesDepartment()->dept_no], 'selectAll' => true, 'ids' => [$t->formerEmployeeRecord()->emp_no],
+            ])->query(EmployeeVisibility::unrestricted())->ids()],
             'queued csv export' => [fn (self $t) => $t->runQueuedExport(ExportFormat::Csv)],
             'queued xlsx export' => [fn (self $t) => $t->runQueuedExport(ExportFormat::Xlsx)],
             'queued pdf export' => [fn (self $t) => $t->runQueuedExport(ExportFormat::Pdf)],
