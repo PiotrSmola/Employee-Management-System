@@ -1,6 +1,7 @@
 @php
     $date = fn (?string $value) => $value === null || $value === '9999-01-01' ? __('Present') : \Carbon\Carbon::parse($value)->format('d.m.Y');
     $person = fn (object $row) => $row->first_name . ' ' . $row->last_name;
+    $figuresReady = $figuresStatus !== App\Support\FigureCache::PREPARING;
     $male = $gender['M'];
     $female = $gender['F'];
     $people = max(1, $male + $female);
@@ -37,10 +38,10 @@
                                 <p class="mb-0 opacity-90">
                                     <i class="bi bi-person-badge me-1"></i>{{ __('Manager') }}:
                                     @if ($currentManager)
-                                        @if (isset($linkable[$currentManager->emp_no]))
-                                            <a href="{{ route('employees.show', $currentManager->emp_no) }}" class="text-white fw-semibold">{{ $person($currentManager) }}</a>
+                                        @if ($currentManager->hidden)
+                                            <span class="fst-italic">{{ __('outside your department') }}</span>
                                         @else
-                                            <span class="fw-semibold">{{ $person($currentManager) }}</span>
+                                            <a href="{{ route('employees.show', $currentManager->emp_no) }}" class="text-white fw-semibold">{{ $person($currentManager) }}</a>
                                         @endif
                                         ({{ __('since :date', ['date' => $date($currentManager->from_date)]) }})
                                     @else
@@ -76,6 +77,9 @@
             </div>
         </div>
 
+        @include('departments.partials.figures-status')
+
+        @if ($figuresReady)
         {{-- Key figures --}}
         <div class="row g-3 mb-4 justify-content-center">
             <div class="col-md-6 col-xl-3">
@@ -131,7 +135,9 @@
                 <div class="card h-100">
                     <div class="card-header">
                         <h5 class="mb-0"><i class="bi bi-bar-chart me-2 text-primary"></i>{{ __('Headcount by year') }}</h5>
-                        <p class="mb-0 text-muted small">{{ __('Employees in the department at the end of each year') }}</p>
+                        <p class="mb-0 text-muted small">@if ($headcountByYear->isNotEmpty())
+                                {{ __('Assignments in the department at the end of each year, up to the last year with data (:year)', ['year' => $headcountByYear->last()['year']]) }}
+                            @endif</p>
                     </div>
                     <div class="card-body">
                         @if ($headcountByYear->isNotEmpty())
@@ -168,6 +174,8 @@
             </div>
         </div>
 
+                @endif
+
         <div class="row g-4 mb-4">
             <div class="{{ auth()->user()->can('manage-departments') ? 'col-lg-7' : 'col-12' }}">
                 <div class="card h-100">
@@ -188,12 +196,12 @@
                                         @php($isCurrent = $manager->to_date === '9999-01-01')
                                         <tr class="{{ $isCurrent ? 'table-info' : '' }}">
                                             <td>
-                                                @if (isset($linkable[$manager->emp_no]))
-                                                    <a href="{{ route('employees.show', $manager->emp_no) }}" class="fw-semibold">{{ $person($manager) }}</a>
+                                                @if ($manager->hidden)
+                                                    <span class="fst-italic text-muted">{{ __('A manager outside your department') }}</span>
                                                 @else
-                                                    <span class="fw-semibold">{{ $person($manager) }}</span>
+                                                    <a href="{{ route('employees.show', $manager->emp_no) }}" class="fw-semibold">{{ $person($manager) }}</a>
+                                                    <small class="text-muted d-block">#{{ $manager->emp_no }}</small>
                                                 @endif
-                                                <small class="text-muted d-block">#{{ $manager->emp_no }}</small>
                                             </td>
                                             <td>
                                                 {{ $date($manager->from_date) }} &ndash; {{ $date($manager->to_date) }}
@@ -220,6 +228,7 @@
             @endcan
         </div>
 
+        @if ($figuresReady)
         <div class="row g-4">
             @foreach ([
                 ['title' => __('Recently joined'), 'icon' => 'box-arrow-in-right', 'rows' => $recentJoiners, 'joined' => true],
@@ -234,16 +243,20 @@
                             @forelse ($list['rows'] as $row)
                                 <div class="d-flex align-items-center {{ !$loop->last ? 'border-bottom pb-2 mb-2' : '' }}">
                                     <div class="flex-grow-1">
-                                        @if (isset($linkable[$row->emp_no]))
-                                            <a href="{{ route('employees.show', $row->emp_no) }}" class="fw-semibold">{{ $person($row) }}</a>
+                                        @if ($row->hidden)
+                                            <span class="fst-italic text-muted">{{ __('Employee moved to another department') }}</span>
                                         @else
-                                            <span class="fw-semibold">{{ $person($row) }}</span>
+                                            <a href="{{ route('employees.show', $row->emp_no) }}" class="fw-semibold">{{ $person($row) }}</a>
                                         @endif
                                         <small class="text-muted d-block">
                                             <i class="bi bi-calendar3 me-1"></i>{{ $date($row->date) }}
                                         </small>
                                     </div>
-                                    @if ($list['joined'])
+                                    @if ($row->hidden)
+
+                                        {{-- Nothing that identifies the person or where they went. --}}
+
+                                    @elseif ($list['joined'])
                                         <span class="badge {{ $row->hired ? 'text-bg-success' : 'text-bg-primary' }} role-badge">
                                             {{ $row->hired ? __('Hired') : __('Transferred in') }}
                                         </span>
@@ -261,6 +274,7 @@
                 </div>
             @endforeach
         </div>
+        @endif
     </main>
 
     @include('layouts.footer', ['fixedBottom' => false])

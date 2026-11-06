@@ -12,8 +12,8 @@ use Illuminate\Validation\ValidationException;
 /**
  * Creating, renaming and deleting departments and changing their managers
  * (dept_manager). Callers check `manage-departments`; every change is written
- * to the audit log in the same transaction and the cached figures are flushed
- * afterwards.
+ * to the audit log in the same transaction. Cached figures are cleared only
+ * where they change: managers and department names are read live.
  *
  * dept_manager keeps one row per employee and department (primary key
  * emp_no + dept_no); the current manager has to_date = 9999-01-01. A change of
@@ -58,8 +58,7 @@ class DepartmentManagementService
             }
         });
 
-        // Names appear in company-wide figures (dashboard) as well.
-        EmployeeDataCache::flush([$department->dept_no]);
+        EmployeeDataCache::flushDepartmentNames();
     }
 
     /**
@@ -118,7 +117,7 @@ class DepartmentManagementService
         $fail = fn (string $field, string $message) => throw ValidationException::withMessages([$field => $message])
             ->errorBag(self::ASSIGN_BAG);
 
-        $result = DB::transaction(function () use ($department, $empNo, $fromDate, $fail) {
+        return DB::transaction(function () use ($department, $empNo, $fromDate, $fail) {
             // Serializes manager changes of this department.
             Department::query()->whereKey($department->dept_no)->lockForUpdate()->first();
 
@@ -182,10 +181,6 @@ class DepartmentManagementService
 
             return $result;
         });
-
-        EmployeeDataCache::flush([$department->dept_no]);
-
-        return $result;
     }
 
     /**
@@ -200,7 +195,7 @@ class DepartmentManagementService
         $fail = fn (string $field, string $message) => throw ValidationException::withMessages([$field => $message])
             ->errorBag(self::END_BAG);
 
-        $result = DB::transaction(function () use ($department, $toDate, $fail) {
+        return DB::transaction(function () use ($department, $toDate, $fail) {
             Department::query()->whereKey($department->dept_no)->lockForUpdate()->first();
 
             $current = $this->currentManagerRow($department->dept_no);
@@ -221,10 +216,6 @@ class DepartmentManagementService
 
             return $result;
         });
-
-        EmployeeDataCache::flush([$department->dept_no]);
-
-        return $result;
     }
 
     /**

@@ -9,7 +9,6 @@ use App\Services\DepartmentStatistics;
 use App\Support\EmployeeVisibility;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
@@ -36,7 +35,7 @@ class DepartmentController extends Controller
             ->get(['dept_no', 'dept_name']);
 
         return view('departments.index', [
-            'departments' => $this->statistics->overview($departments, $visibility->canSeeSalaries()),
+            ...$this->statistics->overview($departments, $visibility),
             'canSeeSalaries' => $visibility->canSeeSalaries(),
             'isDepartmentScoped' => $visibility->isDepartmentScoped(),
         ]);
@@ -47,16 +46,13 @@ class DepartmentController extends Controller
         $this->authorize('view', $department);
 
         $visibility = EmployeeVisibility::for($request->user());
-        $details = $this->statistics->details($department, $visibility->canSeeSalaries());
-
         return view('departments.show', [
             'department' => $department,
             'canSeeSalaries' => $visibility->canSeeSalaries(),
-            'linkable' => $this->linkableEmployees($visibility, $details),
             'deletionBlocked' => $request->user()->can('delete', $department)
                 ? $this->departments->deletionBlockedReason($department)
                 : null,
-            ...$details,
+            ...$this->statistics->details($department, $visibility),
         ]);
     }
 
@@ -99,29 +95,6 @@ class DepartmentController extends Controller
 
         return redirect()->route('departments.index')
             ->with('status', __('Department :name has been deleted.', ['name' => $department->dept_name]));
-    }
-
-    /**
-     * Employee numbers on the page whose profile the user may open (a manager
-     * cannot open the profiles of employees who moved to other departments).
-     *
-     * @param  array<string, mixed>  $details
-     * @return array<int, true>
-     */
-    private function linkableEmployees(EmployeeVisibility $visibility, array $details): array
-    {
-        $ids = collect([$details['recentJoiners'], $details['recentLeavers'], $details['managerHistory']])
-            ->flatten(1)
-            ->pluck('emp_no')
-            ->map(fn ($id) => (int) $id)
-            ->unique()
-            ->values();
-
-        if ($visibility->isDepartmentScoped() && $ids->isNotEmpty()) {
-            $ids = $visibility->constrain(DB::table('employees')->whereIn('emp_no', $ids))->pluck('emp_no');
-        }
-
-        return $ids->mapWithKeys(fn ($id) => [(int) $id => true])->all();
     }
 
     /**

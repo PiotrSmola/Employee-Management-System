@@ -9,7 +9,9 @@ use App\Models\DeptEmp;
 use App\Models\DeptManager;
 use App\Models\Employee;
 use App\Models\User;
+use App\Services\DepartmentStatistics;
 use App\Support\EmployeeDataCache;
+use App\Support\FigureCache;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -24,7 +26,6 @@ class DepartmentManagementTest extends TestCase
     public function test_admin_creates_a_department(): void
     {
         Department::factory()->create(['dept_no' => 'd009', 'dept_name' => 'Customer Service']);
-        Cache::put(EmployeeDataCache::DEPARTMENTS_OVERVIEW, ['stale']);
         Cache::put(EmployeeDataCache::DASHBOARD_STATS, ['stale']);
 
         $this->get(route('departments.create'))->assertOk()->assertSee('value="d010"', false);
@@ -41,7 +42,6 @@ class DepartmentManagementTest extends TestCase
         $this->assertSame($this->user->id, $log->user_id);
         $this->assertEquals(['after' => ['dept_no' => 'd010', 'dept_name' => 'Data Science']], $log->changes);
 
-        $this->assertFalse(Cache::has(EmployeeDataCache::DEPARTMENTS_OVERVIEW));
         $this->assertFalse(Cache::has(EmployeeDataCache::DASHBOARD_STATS));
     }
 
@@ -82,7 +82,9 @@ class DepartmentManagementTest extends TestCase
     {
         $this->signInAs(Role::Hr);
         $department = Department::factory()->create(['dept_no' => 'd005', 'dept_name' => 'Development']);
-        Cache::put(EmployeeDataCache::departmentDetails('d005'), ['stale']);
+        Cache::put(EmployeeDataCache::EMPLOYEES_BY_DEPARTMENT, ['stale']);
+        Cache::put(EmployeeDataCache::DASHBOARD_STATS, ['kept']);
+        app(DepartmentStatistics::class)->refreshDetails('d005');
 
         $this->get(route('departments.edit', $department))->assertOk()->assertSee('Development');
 
@@ -93,7 +95,25 @@ class DepartmentManagementTest extends TestCase
         $log = ActivityLog::query()->where('action', 'department.renamed')->sole();
         $this->assertSame('d005', $log->subject_id);
         $this->assertEquals(['before' => ['dept_name' => 'Development'], 'after' => ['dept_name' => 'Engineering']], $log->changes);
-        $this->assertFalse(Cache::has(EmployeeDataCache::departmentDetails('d005')));
+        // Only what holds department names is cleared.
+        $this->assertFalse(Cache::has(EmployeeDataCache::EMPLOYEES_BY_DEPARTMENT));
+        $this->assertTrue(Cache::has(EmployeeDataCache::DASHBOARD_STATS));
+        $this->assertTrue(FigureCache::isFresh(EmployeeDataCache::departmentDetails('d005')));
+    }
+
+    public function test_a_name_differing_only_in_case_collides_with_another_department(): void
+    {
+        $department = Department::factory()->create(['dept_no' => 'd005', 'dept_name' => 'Development']);
+        Department::factory()->create(['dept_no' => 'd007', 'dept_name' => 'Sales']);
+
+        $this->put(route('departments.update', $department), ['dept_name' => 'SALES'])->assertSessionHasErrors('dept_name');
+        $this->post(route('departments.store'), ['dept_no' => 'd010', 'dept_name' => 'sales'])->assertSessionHasErrors('dept_name');
+
+        // Correcting the case of the department's own name is a rename.
+        $this->put(route('departments.update', $department), ['dept_name' => 'DEVELOPMENT'])->assertSessionHasNoErrors();
+
+        $this->assertSame('DEVELOPMENT', $department->fresh()->dept_name);
+        $this->assertSame(1, ActivityLog::query()->where('action', 'department.renamed')->count());
     }
 
     public function test_renaming_keeps_the_code_and_the_unique_name_rule(): void
@@ -115,7 +135,7 @@ class DepartmentManagementTest extends TestCase
     public function test_a_department_that_never_had_employees_can_be_deleted(): void
     {
         $department = Department::factory()->create(['dept_no' => 'd010', 'dept_name' => 'Short-lived']);
-        Cache::put(EmployeeDataCache::departmentDetails('d010'), ['stale']);
+        app(DepartmentStatistics::class)->refreshDetails('d010');
 
         $this->delete(route('departments.destroy', $department))
             ->assertRedirect(route('departments.index'))
@@ -125,7 +145,7 @@ class DepartmentManagementTest extends TestCase
         $log = ActivityLog::query()->where('action', 'department.deleted')->sole();
         $this->assertSame('d010', $log->subject_id);
         $this->assertEquals(['before' => ['dept_no' => 'd010', 'dept_name' => 'Short-lived']], $log->changes);
-        $this->assertFalse(Cache::has(EmployeeDataCache::departmentDetails('d010')));
+        $this->assertFalse(FigureCache::isFresh(EmployeeDataCache::departmentDetails('d010')));
     }
 
     /**
@@ -138,6 +158,7 @@ class DepartmentManagementTest extends TestCase
             'former employee' => ['former'],
             'manager history only' => ['manager'],
             'manager account' => ['account'],
+            'deactivated manager account' => ['inactive account'],
         ];
     }
 
@@ -154,6 +175,7 @@ class DepartmentManagementTest extends TestCase
                 'dept_no' => 'd010', 'from_date' => '1990-01-01', 'to_date' => '1991-01-01',
             ]),
             'account' => User::factory()->manager($department)->create(),
+            'inactive account' => User::factory()->manager($department)->inactive()->create(),
         };
 
         $this->get(route('departments.show', $department))->assertOk()->assertSee('disabled', false);

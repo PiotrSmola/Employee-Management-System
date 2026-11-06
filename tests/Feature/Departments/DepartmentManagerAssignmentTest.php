@@ -8,7 +8,9 @@ use App\Models\Department;
 use App\Models\DeptManager;
 use App\Models\Employee;
 use App\Services\DepartmentManagementService;
+use App\Services\DepartmentStatistics;
 use App\Support\EmployeeDataCache;
+use App\Support\FigureCache;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -47,9 +49,7 @@ class DepartmentManagerAssignmentTest extends TestCase
 
     public function test_assigning_a_manager_closes_the_current_period_and_opens_a_new_one(): void
     {
-        Cache::put(EmployeeDataCache::DEPARTMENTS_OVERVIEW, ['stale']);
-        Cache::put(EmployeeDataCache::departmentDetails('d005'), ['stale']);
-        Cache::put(EmployeeDataCache::departmentDetails('d007'), ['other']);
+        $this->warmFigures();
 
         $this->post(route('departments.managers.store', $this->dev), ['emp_no' => $this->engineer->emp_no, 'from_date' => '2001-03-01'])
             ->assertRedirect(route('departments.show', 'd005'))
@@ -71,9 +71,7 @@ class DepartmentManagerAssignmentTest extends TestCase
             'previous_emp_no' => $this->boss->emp_no,
         ], $log->changes);
 
-        $this->assertFalse(Cache::has(EmployeeDataCache::DEPARTMENTS_OVERVIEW));
-        $this->assertFalse(Cache::has(EmployeeDataCache::departmentDetails('d005')));
-        $this->assertTrue(Cache::has(EmployeeDataCache::departmentDetails('d007')));
+        $this->assertFiguresStayCached();
 
         $this->get(route('departments.show', $this->dev))->assertOk()
             ->assertSeeInOrder(['Ed Engineer', '01.03.2001', 'Present', 'Bella Boss', '01.01.1995', '01.03.2001']);
@@ -149,7 +147,7 @@ class DepartmentManagerAssignmentTest extends TestCase
 
     public function test_ending_management_without_successor(): void
     {
-        Cache::put(EmployeeDataCache::DEPARTMENTS_OVERVIEW, ['stale']);
+        $this->warmFigures();
 
         $this->post(route('departments.managers.end', $this->dev), ['to_date' => '2000-12-31'])
             ->assertRedirect(route('departments.show', 'd005'))
@@ -159,7 +157,7 @@ class DepartmentManagerAssignmentTest extends TestCase
         $log = ActivityLog::query()->where('action', 'department.manager_ended')->sole();
         $this->assertSame('d005', $log->subject_id);
         $this->assertEquals(['emp_no' => $this->boss->emp_no, 'from_date' => '1995-01-01', 'to_date' => '2000-12-31'], $log->changes);
-        $this->assertFalse(Cache::has(EmployeeDataCache::DEPARTMENTS_OVERVIEW));
+        $this->assertFiguresStayCached();
 
         $this->get(route('departments.show', $this->dev))->assertOk()->assertSee('none')->assertDontSee('End the management of');
 
@@ -221,6 +219,24 @@ class DepartmentManagerAssignmentTest extends TestCase
         $this->getJson(route('departments.managers.candidates', $this->dev))->assertForbidden();
 
         $this->assertSame([[$this->boss->emp_no, '1995-01-01', '9999-01-01']], $this->periods('d005'));
+    }
+
+    private function warmFigures(): void
+    {
+        $statistics = app(DepartmentStatistics::class);
+        $statistics->refreshOverview();
+        $statistics->refreshDetails('d005');
+        Cache::put(EmployeeDataCache::DASHBOARD_STATS, ['kept']);
+    }
+
+    /**
+     * Managers are read live: changing them leaves every cached figure in place.
+     */
+    private function assertFiguresStayCached(): void
+    {
+        $this->assertTrue(FigureCache::isFresh(EmployeeDataCache::DEPARTMENTS_OVERVIEW));
+        $this->assertTrue(FigureCache::isFresh(EmployeeDataCache::departmentDetails('d005')));
+        $this->assertTrue(Cache::has(EmployeeDataCache::DASHBOARD_STATS));
     }
 
     /**

@@ -2,13 +2,15 @@
 
 namespace App\Services;
 
+use App\Jobs\RefreshDepartmentFigures;
 use App\Models\Department;
 use App\Models\Employee;
 use App\Support\EmployeeDataCache;
+use App\Support\EmployeeVisibility;
+use App\Support\FigureCache;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\JoinClause;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -16,58 +18,96 @@ use Illuminate\Support\Facades\DB;
  *
  * The aggregates over the current employees (headcount, titles, salaries,
  * gender, tenure, headcount per year, recent movements) are expensive on the
- * full dataset (~240k current employees), so they are cached
- * ({@see EmployeeDataCache::DEPARTMENTS_OVERVIEW},
- * {@see EmployeeDataCache::departmentDetails()}) - always including the salary
- * figures, which are removed here before anything leaves the service when the
- * caller may not see salaries. Managers (dept_manager) are a few rows and are
- * always read live.
+ * full dataset (~240k current employees), so they go through FigureCache: a
+ * reader gets the cached figures, the last good copy while they are refreshed
+ * after the response, or the status PREPARING while another process computes
+ * them for the first time.
+ *
+ * The cached payload is shared by everyone. What a user may see is decided per
+ * request, here, before anything leaves the service: salary figures only with
+ * `view-salaries`, and a department-scoped user does not get the names and
+ * numbers of employees outside their scope ({@see self::mask()}). Managers
+ * (dept_manager) are a few rows and are always read live, as are department
+ * names, so neither change affects the cached figures.
  *
  * "Current" means to_date = 9999-01-01 (dept_emp, titles, salaries, dept_manager).
+ * Headcounts count current dept_emp rows (assignments), the same way the
+ * dashboard does: the dataset has one per employee.
  */
 class DepartmentStatistics
 {
     public const CURRENT = '9999-01-01';
 
-    /** Cache lifetime in seconds; writes through the app flush the keys right away. */
-    private const TTL = 1800;
+    /**
+     * Seconds until figures are refreshed. The overview is not invalidated by a
+     * change of one employee (EmployeeDataCache::flush()), so it expires sooner.
+     */
+    private const OVERVIEW_TTL = 900;
+
+    private const DETAILS_TTL = 1800;
 
     /**
      * Optimizer hint for the salary figures: read the current salaries from the
      * covering (to_date, salary) index and look up each employee's department.
      * The optimizer's own choice, from dept_emp through the salaries primary
      * key, reads every employee's whole salary history (most of the 2.8M rows).
+     * MySQL silently ignores a hint on a missing index, so a test checks it exists.
      */
-    private const SALARY_PLAN = '/*+ JOIN_ORDER(s, de) INDEX(s salaries_to_date_salary_index) */';
+    public const SALARY_INDEX = 'salaries_to_date_salary_index';
+
+    private const SALARY_PLAN = '/*+ JOIN_ORDER(s, de) INDEX(s '.self::SALARY_INDEX.') */';
 
     /** Rows in the "recently joined" / "recently left" lists. */
     public const RECENT_LIMIT = 8;
 
     /**
-     * Index rows for $departments (in the given order).
+     * Index rows for $departments (in the given order). Figures are null while
+     * figuresStatus is FigureCache::PREPARING.
      *
      * @param  Collection<int, Department>  $departments
-     * @return Collection<int, object{dept_no: string, dept_name: string, headcount: int, titles: int, avg_salary: ?float, manager: ?object}>
+     * @return array{departments: Collection<int, object>, figuresStatus: string}
      */
-    public function overview(Collection $departments, bool $withSalaries): Collection
+    public function overview(Collection $departments, EmployeeVisibility $visibility): array
     {
-        $figures = Cache::remember(EmployeeDataCache::DEPARTMENTS_OVERVIEW, self::TTL, fn () => $this->computeOverview());
-        $managers = $this->currentManagers($departments->pluck('dept_no')->all());
+        $read = FigureCache::read(
+            EmployeeDataCache::DEPARTMENTS_OVERVIEW,
+            self::OVERVIEW_TTL,
+            fn () => $this->computeOverview(),
+            function (): void {
+                RefreshDepartmentFigures::dispatch()->afterResponse();
+            },
+        );
 
-        return $departments->map(fn (Department $department) => (object) [
-            'dept_no' => $department->dept_no,
-            'dept_name' => $department->dept_name,
-            'headcount' => (int) ($figures[$department->dept_no]['headcount'] ?? 0),
-            'titles' => (int) ($figures[$department->dept_no]['titles'] ?? 0),
-            'avg_salary' => $withSalaries ? ($figures[$department->dept_no]['avg_salary'] ?? null) : null,
-            'manager' => $managers[$department->dept_no] ?? null,
-        ])->values();
+        $figures = $read['value'];
+        $withSalaries = $visibility->canSeeSalaries();
+        $managers = $this->currentManagers($departments->pluck('dept_no')->all());
+        $visible = $this->visibleEmployees($visibility, $managers->pluck('emp_no'));
+
+        return [
+            'figuresStatus' => $read['status'],
+            'departments' => $departments->map(function (Department $department) use ($figures, $withSalaries, $managers, $visible) {
+                $row = $figures[$department->dept_no] ?? null;
+                $manager = $managers[$department->dept_no] ?? null;
+
+                return (object) [
+                    'dept_no' => $department->dept_no,
+                    'dept_name' => $department->dept_name,
+                    'headcount' => $figures === null ? null : (int) ($row['headcount'] ?? 0),
+                    'titles' => $figures === null ? null : (int) ($row['titles'] ?? 0),
+                    'avg_salary' => $withSalaries ? ($row['avg_salary'] ?? null) : null,
+                    'manager' => $manager === null ? null : $this->mask($manager, $visible),
+                ];
+            })->values(),
+        ];
     }
 
     /**
-     * Everything the department page shows. Salary figures are null without $withSalaries.
+     * Everything the department page shows. Salary figures are null without
+     * `view-salaries`; employees outside a scoped user's view have `hidden` set
+     * and no name, number or destination.
      *
      * @return array{
+     *     figuresStatus: string,
      *     headcount: int,
      *     gender: array{M: int, F: int},
      *     avgTenureYears: ?float,
@@ -80,28 +120,94 @@ class DepartmentStatistics
      *     managerHistory: Collection,
      * }
      */
-    public function details(Department $department, bool $withSalaries): array
+    public function details(Department $department, EmployeeVisibility $visibility): array
     {
-        $figures = Cache::remember(
-            EmployeeDataCache::departmentDetails($department->dept_no),
-            self::TTL,
-            fn () => $this->computeDetails($department->dept_no)
+        $deptNo = $department->dept_no;
+
+        $read = FigureCache::read(
+            EmployeeDataCache::departmentDetails($deptNo),
+            self::DETAILS_TTL,
+            fn () => $this->computeDetails($deptNo),
+            function () use ($deptNo): void {
+                RefreshDepartmentFigures::dispatch($deptNo)->afterResponse();
+            },
         );
 
-        $history = $this->managerHistory($department->dept_no);
+        $figures = $read['value'] ?? [
+            'headcount' => 0,
+            'gender' => ['M' => 0, 'F' => 0],
+            'avgTenureYears' => null,
+            'salary' => null,
+            'titles' => [],
+            'headcountByYear' => [],
+            'recentJoiners' => [],
+            'recentLeavers' => [],
+        ];
+
+        $history = $this->managerHistory($deptNo);
+
+        $visible = $this->visibleEmployees($visibility, collect([
+            ...$history->pluck('emp_no'),
+            ...array_column($figures['recentJoiners'], 'emp_no'),
+            ...array_column($figures['recentLeavers'], 'emp_no'),
+        ]));
+
+        $departmentNames = array_filter(array_column($figures['recentLeavers'], 'moved_to')) === []
+            ? collect()
+            : Department::query()->pluck('dept_name', 'dept_no');
+
+        $history = $history->map(fn (object $row) => $this->mask($row, $visible));
 
         return [
+            'figuresStatus' => $read['status'],
             'headcount' => $figures['headcount'],
             'gender' => $figures['gender'],
             'avgTenureYears' => $figures['avgTenureYears'],
-            'salary' => $withSalaries ? $figures['salary'] : null,
+            'salary' => $visibility->canSeeSalaries() ? $figures['salary'] : null,
             'titles' => collect($figures['titles'])->map(fn ($row) => (object) $row),
             'headcountByYear' => collect($figures['headcountByYear']),
-            'recentJoiners' => collect($figures['recentJoiners'])->map(fn ($row) => (object) $row),
-            'recentLeavers' => collect($figures['recentLeavers'])->map(fn ($row) => (object) $row),
+            'recentJoiners' => collect($figures['recentJoiners'])
+                ->map(fn ($row) => $this->mask((object) $row, $visible)),
+            'recentLeavers' => collect($figures['recentLeavers'])
+                ->map(function ($row) use ($departmentNames, $visible) {
+                    // A deleted department no longer has a name; the move is still a move.
+                    $row['moved_to'] = $row['moved_to'] === null ? null : ($departmentNames[$row['moved_to']] ?? __('another department'));
+
+                    return $this->mask((object) $row, $visible);
+                }),
             'currentManager' => $history->firstWhere('to_date', self::CURRENT),
             'managerHistory' => $history,
         ];
+    }
+
+    /**
+     * Recompute the overview now, unless another process is on it.
+     *
+     * @return bool were the figures computed?
+     */
+    public function refreshOverview(bool $onlyWhenExpired = false): bool
+    {
+        return FigureCache::refresh(
+            EmployeeDataCache::DEPARTMENTS_OVERVIEW,
+            self::OVERVIEW_TTL,
+            fn () => $this->computeOverview(),
+            $onlyWhenExpired,
+        );
+    }
+
+    /**
+     * Recompute the figures of one department now, unless another process is on it.
+     *
+     * @return bool were the figures computed?
+     */
+    public function refreshDetails(string $deptNo, bool $onlyWhenExpired = false): bool
+    {
+        return FigureCache::refresh(
+            EmployeeDataCache::departmentDetails($deptNo),
+            self::DETAILS_TTL,
+            fn () => $this->computeDetails($deptNo),
+            $onlyWhenExpired,
+        );
     }
 
     /**
@@ -166,6 +272,53 @@ class DepartmentStatistics
     }
 
     /**
+     * Which of $empNos a scoped user may see; null = no restriction.
+     *
+     * @param  Collection<int, int|string>  $empNos
+     * @return array<int, true>|null
+     */
+    private function visibleEmployees(EmployeeVisibility $visibility, Collection $empNos): ?array
+    {
+        if (! $visibility->isDepartmentScoped()) {
+            return null;
+        }
+
+        if ($empNos->isEmpty()) {
+            return [];
+        }
+
+        return $visibility->constrain(DB::table('employees')->whereIn('emp_no', $empNos->unique()->values()))
+            ->pluck('emp_no')
+            ->mapWithKeys(fn ($empNo) => [(int) $empNo => true])
+            ->all();
+    }
+
+    /**
+     * Set `hidden` on a row about an employee, and for employees outside the
+     * user's view drop what identifies them: the row stays (the department's
+     * history is the manager's to see), the person does not.
+     *
+     * @param  array<int, true>|null  $visible
+     */
+    private function mask(object $row, ?array $visible): object
+    {
+        if ($visible === null || isset($visible[(int) $row->emp_no])) {
+            $row->hidden = false;
+
+            return $row;
+        }
+
+        return (object) [
+            ...(array) $row,
+            'emp_no' => null,
+            'first_name' => null,
+            'last_name' => null,
+            'moved_to' => null,
+            'hidden' => true,
+        ];
+    }
+
+    /**
      * @return array<string, array{headcount: int, titles: int, avg_salary: ?float}>
      */
     private function computeOverview(): array
@@ -200,7 +353,8 @@ class DepartmentStatistics
     }
 
     /**
-     * Cached part of the department page (plain arrays, so the cache does not hold objects).
+     * Cached part of the department page (plain arrays, so the cache does not
+     * hold objects; no department names, so a rename does not affect it).
      *
      * @return array<string, mixed>
      */
@@ -245,10 +399,11 @@ class DepartmentStatistics
     }
 
     /**
-     * Employees in the department at the end of each year, from the first
-     * assignment to the last recorded change: the running total of the
-     * assignments that started minus those that ended (a period ends on its
-     * to_date, the day the next one starts).
+     * Assignments in the department at the end of each year, from its first
+     * assignment to the last year with any data, the same for every department
+     * (the imported dataset ends in 2002): the running total of the assignments
+     * that started minus those that ended (a period ends on its to_date, the
+     * day the next one starts). Counts dept_emp rows, not distinct employees.
      *
      * @return array<int, array{year: int, headcount: int}>
      */
@@ -260,22 +415,26 @@ class DepartmentStatistics
             ->selectRaw('year(from_date) as year, count(*) as total')
             ->pluck('total', 'year');
 
-        $left = DB::table('dept_emp')
-            ->where('dept_no', $deptNo)
-            ->where('to_date', '<>', self::CURRENT)
-            ->groupByRaw('year(to_date)')
-            ->selectRaw('year(to_date) as year, count(*) as total')
-            ->pluck('total', 'year');
-
         if ($joined->isEmpty()) {
             return [];
         }
 
-        $years = [...$joined->keys()->all(), ...$left->keys()->all()];
+        $left = DB::table('dept_emp')
+            ->where('dept_no', $deptNo)
+            ->where('to_date', '<', self::CURRENT)
+            ->groupByRaw('year(to_date)')
+            ->selectRaw('year(to_date) as year, count(*) as total')
+            ->pluck('total', 'year');
+
+        $lastYear = (int) substr(max(
+            (string) DB::table('dept_emp')->max('from_date'),
+            (string) DB::table('dept_emp')->where('to_date', '<', self::CURRENT)->max('to_date'),
+        ), 0, 4);
+
         $rows = [];
         $running = 0;
 
-        for ($year = (int) min($years); $year <= (int) max($years); $year++) {
+        for ($year = (int) $joined->keys()->min(); $year <= $lastYear; $year++) {
             $running += (int) ($joined[$year] ?? 0) - (int) ($left[$year] ?? 0);
             $rows[] = ['year' => $year, 'headcount' => $running];
         }
@@ -297,12 +456,9 @@ class DepartmentStatistics
             ->orderByDesc('from_date')
             ->orderByDesc('emp_no')
             ->limit(self::RECENT_LIMIT)
-            ->get(['emp_no', 'from_date', 'to_date']);
+            ->get(['emp_no', 'from_date']);
 
-        $people = DB::table('employees')
-            ->whereIn('emp_no', $rows->pluck('emp_no'))
-            ->get(['emp_no', 'first_name', 'last_name', 'hire_date'])
-            ->keyBy('emp_no');
+        $people = $this->people($rows);
 
         return $rows->map(fn ($row) => [
             'emp_no' => (int) $row->emp_no,
@@ -310,40 +466,58 @@ class DepartmentStatistics
             'last_name' => $people[$row->emp_no]->last_name,
             'date' => $row->from_date,
             'hired' => $row->from_date === $people[$row->emp_no]->hire_date,
-            'still_here' => $row->to_date === self::CURRENT,
         ])->all();
     }
 
     /**
-     * Latest assignments that ended; `moved_to` = the department the employee
-     * went to next (null: left the company).
+     * Latest assignments that ended; `moved_to` = the dept_no the employee went
+     * to next (null: left the company). details() replaces it with the name.
      *
      * @return array<int, array<string, mixed>>
      */
     private function recentLeavers(string $deptNo): array
     {
-        $rows = DB::table('dept_emp as de')
-            ->join('employees as e', 'e.emp_no', '=', 'de.emp_no')
-            ->where('de.dept_no', $deptNo)
-            ->where('de.to_date', '<>', self::CURRENT)
-            ->orderByDesc('de.to_date')
-            ->orderByDesc('de.emp_no')
+        // Read from the (dept_no, to_date) index in order, names afterwards.
+        $rows = DB::table('dept_emp')
+            ->where('dept_no', $deptNo)
+            ->where('to_date', '<', self::CURRENT)
+            ->orderByDesc('to_date')
+            ->orderByDesc('emp_no')
             ->limit(self::RECENT_LIMIT)
-            ->get(['de.emp_no', 'e.first_name', 'e.last_name', 'de.to_date']);
+            ->get(['emp_no', 'to_date']);
 
-        $next = $rows->isEmpty() ? collect() : DB::table('dept_emp as n')
-            ->join('departments as d', 'd.dept_no', '=', 'n.dept_no')
-            ->whereIn('n.emp_no', $rows->pluck('emp_no'))
-            ->where('n.dept_no', '<>', $deptNo)
-            ->get(['n.emp_no', 'n.from_date', 'd.dept_name']);
+        $people = $this->people($rows);
+
+        $later = DB::table('dept_emp')
+            ->whereIn('emp_no', $rows->pluck('emp_no'))
+            ->where('dept_no', '<>', $deptNo)
+            ->orderBy('from_date')
+            ->get(['emp_no', 'dept_no', 'from_date']);
 
         return $rows->map(fn ($row) => [
             'emp_no' => (int) $row->emp_no,
-            'first_name' => $row->first_name,
-            'last_name' => $row->last_name,
+            'first_name' => $people[$row->emp_no]->first_name,
+            'last_name' => $people[$row->emp_no]->last_name,
             'date' => $row->to_date,
-            'moved_to' => $next->where('emp_no', $row->emp_no)->firstWhere('from_date', $row->to_date)?->dept_name,
+            'moved_to' => $later
+                ->where('emp_no', $row->emp_no)
+                ->where('from_date', '>=', $row->to_date)
+                ->first()?->dept_no,
         ])->all();
+    }
+
+    /**
+     * Names and hire dates of the employees of a few rows, by emp_no.
+     *
+     * @param  Collection<int, object>  $rows
+     * @return Collection<int, object>
+     */
+    private function people(Collection $rows): Collection
+    {
+        return DB::table('employees')
+            ->whereIn('emp_no', $rows->pluck('emp_no'))
+            ->get(['emp_no', 'first_name', 'last_name', 'hire_date'])
+            ->keyBy('emp_no');
     }
 
     /**

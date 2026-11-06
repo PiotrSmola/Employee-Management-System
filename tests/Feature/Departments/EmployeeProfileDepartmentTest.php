@@ -117,7 +117,7 @@ class EmployeeProfileDepartmentTest extends TestCase
 
     public function test_unknown_department_parameters_are_ignored(): void
     {
-        foreach (['d999', '', 'all', 'd005-x'] as $value) {
+        foreach (['d999', '', 'all', 'd005-x', 'd00%', "d005'"] as $value) {
             Livewire::withQueryParams(['department' => $value])->test(EmployeeList::class)->assertSet('department', 'all');
             Livewire::withQueryParams(['department' => $value])->test(EmployeeFilter::class)
                 ->assertSet('department', 'all')

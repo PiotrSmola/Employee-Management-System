@@ -34,6 +34,7 @@
         </div>
 
         @include('layouts.flash')
+        @include('departments.partials.figures-status')
 
         <div class="row g-4">
             @forelse ($departments as $department)
@@ -51,11 +52,11 @@
                         <div class="card-body">
                             <div class="row text-center g-2 mb-3">
                                 <div class="col">
-                                    <div class="fs-4 fw-bold text-primary">{{ number_format($department->headcount) }}</div>
+                                    <div class="fs-4 fw-bold text-primary">{{ $department->headcount !== null ? number_format($department->headcount) : '-' }}</div>
                                     <small class="text-muted">{{ __('Employees') }}</small>
                                 </div>
                                 <div class="col">
-                                    <div class="fs-4 fw-bold text-primary">{{ number_format($department->titles) }}</div>
+                                    <div class="fs-4 fw-bold text-primary">{{ $department->titles !== null ? number_format($department->titles) : '-' }}</div>
                                     <small class="text-muted">{{ __('Job titles') }}</small>
                                 </div>
                                 @if ($canSeeSalaries)
@@ -71,7 +72,9 @@
                                 <i class="bi bi-person-badge fs-4 text-primary me-2"></i>
                                 <div class="small">
                                     <div class="text-muted">{{ __('Manager') }}</div>
-                                    @if ($department->manager)
+                                    @if ($department->manager?->hidden)
+                                        <span class="text-muted fst-italic">{{ __('outside your department') }}</span>
+                                    @elseif ($department->manager)
                                         {{-- Above the card's stretched link. --}}
                                         <a href="{{ route('employees.show', $department->manager->emp_no) }}"
                                             class="fw-semibold position-relative" style="z-index: 2;">

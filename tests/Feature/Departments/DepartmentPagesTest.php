@@ -6,9 +6,7 @@ use App\Enums\Role;
 use App\Models\Department;
 use App\Models\DeptManager;
 use App\Models\Employee;
-use App\Support\EmployeeDataCache;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Cache;
 use Tests\Concerns\ActsAsAdmin;
 use Tests\TestCase;
 
@@ -176,19 +174,6 @@ class DepartmentPagesTest extends TestCase
         $this->assertNull($response->viewData('salary'));
     }
 
-    public function test_manager_cannot_open_profiles_of_employees_who_left_to_another_department(): void
-    {
-        $this->signInAs(Role::Manager, $this->dev);
-        $transferred = Employee::query()->where('last_name', 'Transfer')->firstOrFail();
-        $leaver = Employee::query()->where('last_name', 'Leaver')->firstOrFail();
-
-        $linkable = $this->get(route('departments.show', $this->dev))->assertOk()->viewData('linkable');
-
-        $this->assertArrayHasKey($leaver->emp_no, $linkable);       // last department was Development
-        $this->assertArrayNotHasKey($transferred->emp_no, $linkable); // now in Sales
-        $this->assertArrayHasKey($this->boss->emp_no, $linkable);
-    }
-
     public function test_unknown_or_malformed_departments_are_not_found(): void
     {
         $this->get('/departments/d404')->assertNotFound();
@@ -204,22 +189,6 @@ class DepartmentPagesTest extends TestCase
             ->assertSee('No employees yet')
             ->assertSee('The department has never had a manager.')
             ->assertDontSee('headcountChart');
-    }
-
-    public function test_pages_cache_their_figures_and_flush_clears_them(): void
-    {
-        $this->get(route('departments.index'))->assertOk();
-        $this->get(route('departments.show', $this->dev))->assertOk();
-
-        $this->assertTrue(Cache::has(EmployeeDataCache::DEPARTMENTS_OVERVIEW));
-        $this->assertTrue(Cache::has(EmployeeDataCache::departmentDetails('d005')));
-
-        EmployeeDataCache::flush(['d007']);
-        $this->assertFalse(Cache::has(EmployeeDataCache::DEPARTMENTS_OVERVIEW));
-        $this->assertTrue(Cache::has(EmployeeDataCache::departmentDetails('d005')));
-
-        EmployeeDataCache::flush();
-        $this->assertFalse(Cache::has(EmployeeDataCache::departmentDetails('d005')));
     }
 
     public function test_navbar_links_the_departments_for_every_role(): void

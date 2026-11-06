@@ -35,7 +35,7 @@
                                 {{ $row->manager->first_name }} {{ $row->manager->last_name }}
                             </a>
                         @else
-                            <span class="fw-semibold">{{ $row->manager->first_name }} {{ $row->manager->last_name }}</span>
+                            <span class="text-muted">&ndash;</span>
                         @endif
                     </div>
                 </div>
