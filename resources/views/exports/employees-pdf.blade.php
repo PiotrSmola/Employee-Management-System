@@ -151,18 +151,7 @@
     </div>
 
 
-    @php
-        // Chosen columns (EmployeeExportService::columns()); older callers pass none.
-        $columns ??= ['emp_no', 'full_name', 'department', 'title', ...(($withSalaries ?? true) ? ['salary', 'earnings'] : []), 'hire_date', 'gender', 'status'];
-        $labels ??= [
-            'emp_no' => 'Emp #', 'first_name' => 'First Name', 'last_name' => 'Last Name', 'full_name' => 'Full Name',
-            'department' => 'Department', 'title' => 'Job Title', 'salary' => 'Current Salary', 'earnings' => 'Total Earnings',
-            'hire_date' => 'Hire Date', 'gender' => 'Gender', 'status' => 'Status',
-        ];
-        $rowsPerPage = 40;
-    @endphp
-
-    @foreach ($employees->chunk($rowsPerPage) as $page)
+    @foreach ($employees->chunk(40) as $page)
         @if (! $loop->first)
             <div class="page-break"></div>
         @endif
@@ -170,7 +159,7 @@
             <thead>
                 <tr>
                     @foreach ($columns as $column)
-                        <th>{{ $column === 'emp_no' ? 'Emp #' : ($labels[$column] ?? $column) }}</th>
+                        <th>{{ $labels[$column] }}</th>
                     @endforeach
                 </tr>
             </thead>

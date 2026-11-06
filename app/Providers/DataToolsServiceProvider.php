@@ -3,12 +3,16 @@
 namespace App\Providers;
 
 use App\Http\Api\ApiErrorRenderer;
+use App\Http\Controllers\ApiTokenController;
 use App\Http\Middleware\ThrottleApi;
+use App\Services\EmployeeExportService;
+use App\Support\Ability;
 use Illuminate\Cache\RateLimiter;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Throwable;
@@ -51,7 +55,16 @@ class DataToolsServiceProvider extends ServiceProvider
             $view->with([
                 'apiTokens' => $user ? $user->tokens()->latest('id')->get() : collect(),
                 'maxApiTokens' => (int) config('data_tools.api.max_tokens', 20),
+                'apiTokenExpiryDays' => ApiTokenController::EXPIRY_DAYS,
+                'canCreateApiTokens' => Gate::allows(Ability::EXPORT_DATA),
             ]);
         });
+
+        View::composer('components.export-modal', fn ($view) => $view->with([
+            'exportFormats' => EmployeeExportService::formatOptions(),
+            'exportColumns' => EmployeeExportService::availableColumns(Gate::allows(Ability::VIEW_SALARIES)),
+            'exportPdfLimit' => number_format(EmployeeExportService::PDF_LIMIT),
+            'exportQueueThreshold' => number_format((int) config('data_tools.exports.queue_threshold', 20000)),
+        ]));
     }
 }

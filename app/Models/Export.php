@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Number;
 
 /**
  * A bulk export generated in the background ({@see \App\Jobs\GenerateExport}),
@@ -100,6 +101,11 @@ class Export extends Model
         }
 
         $this->delete();
+    }
+
+    public function humanFileSize(): string
+    {
+        return $this->file_size !== null ? Number::fileSize($this->file_size, 1) : '-';
     }
 
     public function statusLabel(): string

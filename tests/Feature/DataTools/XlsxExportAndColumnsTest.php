@@ -259,7 +259,10 @@ class XlsxExportAndColumnsTest extends TestCase
             ->assertOk()
             ->assertSee('data-format="xlsx"', false)
             ->assertSee('id="exportColumn-salary"', false)
-            ->assertSee("addHiddenInput(form, 'columns'", false);
+            ->assertSee('data-export-url="'.route('employees.export').'"', false)
+            ->assertSee('data-csrf-token=', false);
+
+        $this->assertStringContainsString("addHiddenInput(form, 'columns'", (string) file_get_contents(public_path('js/export-modal.js')));
 
         $this->signInAs(Role::Manager, $this->alpha);
         $this->get(route('employees.index'))->assertSee('id="exportColumn-earnings"', false);

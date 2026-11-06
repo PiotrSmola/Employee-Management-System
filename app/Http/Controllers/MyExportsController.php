@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\ActivityLog;
 use App\Models\Export;
 use App\Services\AuditLogger;
+use App\Services\EmployeeExportService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -24,6 +25,8 @@ class MyExportsController extends Controller
             'exports' => $exports,
             'hasUnfinished' => $exports->getCollection()->contains(fn (Export $export) => ! $export->isFinished()),
             'retentionDays' => (int) config('data_tools.exports.retention_days', 7),
+            'pdfLimit' => number_format(EmployeeExportService::PDF_LIMIT),
+            'queueThreshold' => number_format((int) config('data_tools.exports.queue_threshold', 20000)),
         ]);
     }
 

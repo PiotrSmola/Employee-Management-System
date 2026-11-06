@@ -355,8 +355,12 @@ class EmployeeExportEndpointTest extends TestCase
     {
         $this->get(route('employees.index'))
             ->assertOk()
-            ->assertSee("addHiddenInput(form, idsField, (ids || []).join(','))", false)
+            ->assertSee('js/export-modal.js', false)
             ->assertDontSee('Employees[]', false);
+
+        $script = (string) file_get_contents(public_path('js/export-modal.js'));
+        $this->assertStringContainsString("addHiddenInput(form, idsField, (ids || []).join(','))", $script);
+        $this->assertStringNotContainsString('Employees[]', $script);
     }
 
     public function test_empty_selection_redirects_back_with_an_error(): void

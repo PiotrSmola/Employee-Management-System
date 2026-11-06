@@ -1,6 +1,6 @@
 {{-- "My account" -> API tokens ($apiTokens, $maxApiTokens: DataToolsServiceProvider view composer).
      The API requires export-data; without it only existing tokens can be revoked. --}}
-@if (count($apiTokens) > 0 || Gate::allows('export-data'))
+@if (count($apiTokens) > 0 || $canCreateApiTokens)
 <div class="card mt-4" id="api-tokens">
     <div class="card-header d-flex justify-content-between align-items-center">
         <h5 class="mb-0 text-body-emphasis"><i class="bi bi-braces-asterisk me-2"></i>{{ __('API tokens') }}</h5>
@@ -40,7 +40,7 @@
             <div class="col-md-4">
                 <label for="expires_in" class="form-label fw-semibold">{{ __('Expires') }}</label>
                 <select id="expires_in" name="expires_in" class="form-select @error('expires_in', 'apiToken') is-invalid @enderror">
-                    @foreach (\App\Http\Controllers\ApiTokenController::EXPIRY_DAYS as $days)
+                    @foreach ($apiTokenExpiryDays as $days)
                         <option value="{{ $days }}" @selected((string) old('expires_in', '90') === (string) $days)>{{ __('in :days days', ['days' => $days]) }}</option>
                     @endforeach
                     <option value="" @selected(old('expires_in') === '')>{{ __('never') }}</option>

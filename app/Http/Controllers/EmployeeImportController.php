@@ -7,6 +7,7 @@ use App\Services\EmployeeImportService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Number;
 use Illuminate\View\View;
 use OpenSpout\Common\Entity\Row;
 use OpenSpout\Common\Entity\Style\Style;
@@ -32,7 +33,7 @@ class EmployeeImportController extends Controller
             'departments' => DB::table('departments')->orderBy('dept_no')->get(['dept_no', 'dept_name']),
             'titles' => DB::table('titles')->distinct()->orderBy('title')->pluck('title'),
             'maxRows' => (int) config('data_tools.imports.max_rows', 5000),
-            'maxFileKb' => (int) config('data_tools.imports.max_file_kb', 5120),
+            'maxFileSize' => Number::fileSize((int) config('data_tools.imports.max_file_kb', 5120) * 1024),
         ]);
     }
 

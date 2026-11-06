@@ -39,7 +39,7 @@
                                 <div class="form-text">
                                     {{ __('Up to :rows employees and :size per file. Nothing is saved before you confirm the preview.', [
                                         'rows' => number_format($maxRows),
-                                        'size' => \Illuminate\Support\Number::fileSize($maxFileKb * 1024),
+                                        'size' => $maxFileSize,
                                     ]) }}
                                 </div>
                             </div>

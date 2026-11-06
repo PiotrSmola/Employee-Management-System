@@ -74,6 +74,22 @@ class EmployeeExportService
     }
 
     /**
+     * The formats of the export modal; above `queueAbove` rows a format is generated in the background.
+     *
+     * @return array<string, array{label: string, button: string, icon: string, color: string, queueAbove: int}>
+     */
+    public static function formatOptions(): array
+    {
+        $threshold = (int) config('data_tools.exports.queue_threshold', 20000);
+
+        return [
+            'csv' => ['label' => 'CSV', 'button' => 'CSV', 'icon' => 'bi-filetype-csv', 'color' => 'success', 'queueAbove' => $threshold],
+            'xlsx' => ['label' => 'Excel (XLSX)', 'button' => 'Excel', 'icon' => 'bi-file-earmark-excel', 'color' => 'success', 'queueAbove' => $threshold],
+            'pdf' => ['label' => 'PDF', 'button' => 'PDF', 'icon' => 'bi-file-earmark-pdf', 'color' => 'danger', 'queueAbove' => self::PDF_LIMIT],
+        ];
+    }
+
+    /**
      * The columns to export: the requested keys (array or comma-separated string, unknown
      * keys ignored) in the fixed COLUMNS order, without salary columns unless $withSalaries.
      * Nothing (valid) requested means the format's default columns.
@@ -341,7 +357,7 @@ class EmployeeExportService
             'filters' => $query->filters(),
             'withSalaries' => $withSalaryColumns,
             'columns' => $columns,
-            'labels' => array_map(fn ($key) => __(self::COLUMNS[$key][0]), array_combine($columns, $columns)),
+            'labels' => ['emp_no' => 'Emp #'] + array_map(fn ($key) => __(self::COLUMNS[$key][0]), array_combine($columns, $columns)),
         ])
             ->setPaper('A4', 'landscape')
             ->setOptions([

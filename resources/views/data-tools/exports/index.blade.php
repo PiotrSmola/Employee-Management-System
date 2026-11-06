@@ -27,8 +27,8 @@
 
         <p class="text-body-secondary">
             {{ __('Large exports (PDF with more than :pdf rows, CSV / Excel with more than :rows rows) are generated in the background and listed here. Files are deleted automatically after :days days.', [
-                'pdf' => number_format(\App\Services\EmployeeExportService::PDF_LIMIT),
-                'rows' => number_format((int) config('data_tools.exports.queue_threshold')),
+                'pdf' => $pdfLimit,
+                'rows' => $queueThreshold,
                 'days' => $retentionDays,
             ]) }}
             @if ($hasUnfinished)
@@ -70,7 +70,7 @@
                                     </td>
                                     <td class="text-end">{{ $export->row_count !== null ? number_format($export->row_count) : '-' }}</td>
                                     <td class="text-end">
-                                        {{ $export->file_size !== null ? \Illuminate\Support\Number::fileSize($export->file_size, 1) : '-' }}
+                                        {{ $export->humanFileSize() }}
                                     </td>
                                     <td>{{ $export->created_at->format('d.m.Y H:i') }}</td>
                                     <td>{{ $export->finished_at?->format('d.m.Y H:i') ?? '-' }}</td>
