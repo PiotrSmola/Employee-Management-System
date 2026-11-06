@@ -81,6 +81,8 @@
             </div>
         </div>
 
+        @include('departments.partials.employee-profile')
+
         <div class="row g-3 mb-4 justify-content-center">
             @if ($canSeeSalaries)
                 <div class="col-md-3">
