@@ -265,7 +265,7 @@
     @include('layouts.footer', ['fixedBottom' => false])
 
     @if ($salaryChartData->count() > 0)
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        @include('layouts.chartjs')
         <script>
             document.addEventListener('DOMContentLoaded', function() {
                 const ctx = document.getElementById('salaryChart').getContext('2d');
