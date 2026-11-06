@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Enums\ExportFormat;
 use App\Models\Export;
 use App\Services\EmployeeExportService;
 use App\Support\Ability;
@@ -55,7 +56,10 @@ class GenerateExport implements ShouldQueue
         $export->update(['status' => Export::STATUS_PROCESSING, 'started_at' => now()]);
 
         set_time_limit($this->timeout);
-        ini_set('memory_limit', '2G'); // DomPDF keeps the whole document in memory
+        $memoryLimit = (string) ini_get('memory_limit');
+        if ($export->format === ExportFormat::Pdf) {
+            ini_set('memory_limit', '2G'); // DomPDF keeps the whole document in memory; CSV / XLSX are streamed
+        }
 
         $visibility = EmployeeVisibility::for($user);
         $query = ExportSelection::fromArray($export->params['selection'] ?? [])->query($visibility);
@@ -74,6 +78,9 @@ class GenerateExport implements ShouldQueue
             $this->markFailed($export, __('The export could not be generated. Please try again or export fewer employees.'));
 
             return;
+        } finally {
+            // The worker process lives on: do not keep the PDF's memory limit for the next jobs.
+            ini_set('memory_limit', $memoryLimit);
         }
 
         if ($rows === 0) {
