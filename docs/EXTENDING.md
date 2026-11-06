@@ -38,6 +38,7 @@ order. Add a file instead of editing `navbar.blade.php`. Existing slots:
 |------|------|
 | `main/10-dashboard` | Dashboard |
 | `main/20-employees` | All Employees, Export Data |
+| `main/40-reports` | Reports (`view-reports`) |
 | `main/90-users` | Users (admins) |
 | `user/10-account` | My account |
 | `user/90-users` | Users (admins) |
@@ -155,6 +156,16 @@ Keys: `dashboard_stats`, `employees_by_department`, `dashboard_stats:dept:<no>`,
 New cached figures derived from employee data get a key method there and are added to
 `EmployeeDataCache::keys()`, so `flush()` keeps clearing everything.
 
+Reports (`App\Reports`) are cached per figure, department scope and as-of date under a
+versioned namespace instead of single keys: `reports:<version>:<figure>:<scope>:<as-of>`
+(`EmployeeDataCache::report()`, built by `App\Reports\ReportCache::key()`; scope `all`,
+`dept-<no>` or `mgr-<no>`, as-of `current` or `Y-m-d`). `flush()` forgets
+`reports:version` (it is part of `keys()`), which retires every cached report at once;
+`EmployeeDataCache::flushReports()` does only that. Writers therefore need nothing extra.
+`php artisan reports:warm` (scheduled hourly in `routes/console.php`) recomputes the current
+state of the company, of every department and of every manager scope after a flush; options
+`--as-of=Y-m-d`, `--department=d005` (repeatable), `--fresh` (recompute cached figures too).
+
 ## Tests
 
 - Use factories, never the real dataset. `RefreshDatabase` runs against `ems_<ws>_test`.
@@ -165,5 +176,7 @@ New cached figures derived from employee data get a key method there and are add
   `->former($department, 'Staff', endDate: '1999-06-30')`, `previousDepartment:` /
   `previousTitle:` for a history; `Department::factory()`.
 - `Tests\Concerns\BuildsDirectory`: a small fixed directory for query/list/export tests.
+- `Tests\Concerns\BuildsReportData`: five employees with an exactly known history
+  (transfer, leaver, salary changes) for report figures.
 - New abilities go into `tests/Feature/Auth/AuthorizationTest.php`; test every new
   route for an allowed and a forbidden role.

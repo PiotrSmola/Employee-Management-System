@@ -64,7 +64,8 @@ server-side, not by hiding it in the view:
   the history table lists title periods instead (`EmployeeProfileService::build($employee, false)`
   does not query `salaries` at all);
 - bulk export: salary and earnings columns are left out (`EmployeeExportService::csv/pdf($query, false)`);
-- dashboard: no average salary.
+- dashboard: no average salary;
+- reports: the compensation page and its CSV downloads need `view-salaries` on top of `view-reports`.
 
 New features that show salary data must check `EmployeeVisibility::canSeeSalaries()` (or the Gate).
 
@@ -81,7 +82,10 @@ All other roles see every employee.
 
 It is applied in one place, `App\Support\EmployeeVisibility`, used by the directory list and
 filters, profile + profile PDF (403 outside the scope), bulk export (ids outside the scope are
-dropped) and the dashboard (figures of the manager's department).
+dropped), the dashboard (figures of the manager's department) and the reports. In reports a
+manager's department filter is forced to their department, and on top of that only the employees
+in their scope count: people who moved to another department are left out of the department's
+history there, while an administrator filtering by that department sees every row of it.
 
 ```php
 use App\Support\EmployeeVisibility;

@@ -266,6 +266,22 @@ The system uses the following core entities:
 - Recently hired employees
 - Cached data for optimal performance
 
+### Reports & Analytics
+`/reports` (admin, HR, managers; a manager only sees their own department):
+- **Workforce**: headcount on 31 December of each year (stacked per department), hires,
+  leavers, transfers and turnover rate per year, average tenure, gender distribution
+  (overall, per department, per title) and age distribution
+- **Compensation** (`view-salaries`): average / median / minimum / maximum salary per
+  department and per title, salary distribution, gender pay gap per department and title,
+  average salary per year
+- **As-of date**: every report shows the state of the company on a chosen day (history rows
+  with `from_date <= day < to_date`); the yearly series end on that day
+- Department filter (admins, HR), Chart.js charts (light and dark mode), every report as a
+  table and as a CSV download
+- Figures are cached (24 h, cleared by `EmployeeDataCache::flush()`) and precomputed by
+  `php artisan reports:warm`, scheduled hourly - run the scheduler (`php artisan schedule:work`
+  or a cron entry for `schedule:run`) in production
+
 ### Export System
 - Individual employee PDF reports
 - Bulk data export capabilities
