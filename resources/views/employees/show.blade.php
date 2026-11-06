@@ -86,6 +86,7 @@
         @can('manage-employees')
             <x-employee-actions :employee="$employee" :can-see-salaries="$canSeeSalaries" />
         @endcan
+        <x-department-management :employee="$employee" />
 
         <div class="row g-3 mb-4 justify-content-center">
             @if ($canSeeSalaries)

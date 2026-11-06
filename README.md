@@ -7,7 +7,7 @@ A comprehensive web-based employee management platform built with Laravel 12, de
 ### Core Functionality
 - **Employee Directory**: Browse and search through employee records with pagination
 - **Individual Employee Profiles**: Detailed view with employment history, salary progression, and department changes
-- **Department Management**: View departmental structure and employee distribution
+- **Departments**: Department pages with headcount, gender split, tenure, salary figures, job titles, headcount per year and manager history; admins and HR create, rename and delete departments and assign department managers (see [Department Pages and Managers](#department-pages-and-managers))
 - **Dashboard Analytics**: Real-time statistics and insights with caching for optimal performance
 - **Accounts & Roles**: Sign-in, four roles (admin, HR, manager, viewer), department-scoped managers, salary data only for authorized roles, admin user management
 
@@ -284,6 +284,27 @@ The system uses the following core entities:
 - Recently hired employees
 - Cached data for optimal performance
 
+### Department Pages and Managers
+- **Index** (`/departments`): every department with its code, current headcount, current manager,
+  number of distinct current job titles and (with `view-salaries`) the average current salary.
+  Managers only see their own department; other department pages answer 403.
+- **Department page** (`/departments/{dept_no}`): headcount, women/men, average years with the
+  company, average/min/max salary (`view-salaries` only), job titles, headcount at the end of each
+  year up to the last year with data (the imported dataset ends in 2002), recent joiners and
+  leavers, current manager and the full manager history, and a link to the directory filtered to
+  the department (`/employees?department=d005`). Headcounts count assignments (`dept_emp` rows). A
+  manager sees the history of their department without the names of people outside their scope.
+- **Managing** (`manage-departments`: admin, HR): create (code `d` + three digits, unique name),
+  rename, delete (only a department that never had employees, managers or manager accounts).
+  *Assign manager*: a current employee of the department (searchable) and an effective date - the
+  current manager's period ends on that date, the new one starts on it; the date must be after
+  the current manager's start and not before the end of the last ended period, not before the
+  employee joined the department and not in the future. *End management* closes the current period
+  without a successor. A former manager cannot (yet) manage the same department again. Every
+  change is in the audit log (`department.*`).
+- **Employee profile**: the manager of the employee's current department and a badge with the
+  employee's own management periods.
+
 ### Export System
 - Individual employee PDF reports
 - Bulk data export capabilities
@@ -310,6 +331,13 @@ The directory has to stay fast on ~300k employees / ~2.8M salary rows:
 Typical timings on the full dataset (Docker, warm-ish cache): unfiltered list ~0.1 s,
 single filters and sorts 0.1–0.6 s, combined filters up to ~2 s, full CSV export of all
 300k employees ~50 s (streamed).
+
+Department figures are cached (15 minutes for the index, 30 for a department), so the pages
+render in about 0.1 s. They are refreshed by `php artisan departments:warm` (hourly, needs the
+scheduler: `php artisan schedule:run` every minute) and otherwise after the response of a reader,
+who gets the last good copy meanwhile. Only the very first visit, with nothing cached, computes
+them or says they are being prepared. Salary figures are read from the `(to_date, salary)` index
+instead of through each employee's salary history.
 
 The role restrictions do not change this: a viewer's list (salary data stripped) renders like an
 administrator's (~0.1–0.2 s). A manager's list is the department filter on their department
@@ -385,6 +413,9 @@ The application provides the following main routes:
 - `GET /employees/{emp_no}` - Individual employee profile (managers: own department only)
 - `POST /employees/export` - Bulk export functionality (`export-data`)
 - `GET /employees/{emp_no}/export-pdf` - Individual PDF export
+- `GET /departments`, `GET /departments/{dept_no}` - Departments index and page (managers: own department only)
+- `GET /departments/create`, `POST /departments`, `GET /departments/{dept_no}/edit`, `PUT|DELETE /departments/{dept_no}` - Create, rename, delete (`manage-departments`)
+- `GET /departments/{dept_no}/manager-candidates?q=` (60 requests per minute), `POST /departments/{dept_no}/managers`, `POST /departments/{dept_no}/managers/end` - Department managers (`manage-departments`)
 - `GET /account`, `PUT /account/profile`, `PUT /account/password` - My account
 - `GET /employees/create`, `POST /employees` - Hire an employee (`manage-employees`)
 - `PUT /employees/{emp_no}`, `POST /employees/{emp_no}/transfer|title|salary|terminate|rehire|undo`,

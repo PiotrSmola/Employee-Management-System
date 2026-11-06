@@ -12,6 +12,7 @@ contract for code that adds routes, screens, reports or APIs.
 | Gate registration, policies | `App\Providers\AuthorizationServiceProvider` |
 | Which employees / columns a user may see | `App\Support\EmployeeVisibility` |
 | Single employee | `App\Policies\EmployeePolicy` (`view` uses the visibility) |
+| Departments | `App\Policies\DepartmentPolicy` (`view`: a manager only their own department; changes need `manage-departments`) |
 | Signed-in + active check | `auth`, `auth.session`, `active` middleware (`routes/web.php`, which loads `routes/web/*.php` inside the group; Livewire updates in `AppServiceProvider`) |
 
 Inactive accounts (`users.is_active = false`) cannot sign in, are signed out on their next
@@ -113,6 +114,14 @@ EmployeeVisibility::unrestricted();
 The scope constraint is a semi-join on `dept_emp` (indexed by `dept_no, to_date`), so it stays
 fast on the full dataset (a manager's directory renders in about the same time as the
 department filter).
+
+On the department pages a manager only gets their own department (403 for others). That page
+keeps the department's history, but people outside the scope above are not identified: employees
+who moved to another department and former or current managers who are outside it appear
+without name, number, link or destination ("Employee moved to another department", "A manager
+outside your department"). The profile shows "–" instead of the name of a department manager outside
+the scope. The figures are cached once for everybody; `DepartmentStatistics` applies this per
+request from `EmployeeVisibility`.
 
 ## Accounts
 
