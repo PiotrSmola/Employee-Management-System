@@ -2,6 +2,8 @@
 
 namespace App\Reports;
 
+use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -11,13 +13,11 @@ use Illuminate\Support\Facades\DB;
  * Everything is derived from three cached aggregates, each a single GROUP BY
  * over the history tables (no per-employee work in PHP):
  *
- *  - movements: dept_emp rows grouped by (department, start year, end year,
- *    hire year, first/last row of the employee). A row starts on from_date (a
- *    transfer in unless it is the employee's first row) and ends on to_date (a
- *    leaver when it is the last row, a transfer out otherwise). Headcount on
- *    31 Dec of a year = rows started - rows ended up to that day, so the whole
- *    history comes from one scan. Hires use employees.hire_date, which in the
- *    dataset is often earlier than the first department row.
+ *  - movements: dept_emp rows grouped by (department, start year, end year) -
+ *    headcount on 31 Dec of a year = rows started - rows ended up to that day, so
+ *    the whole history comes from one scan - plus the rows of employees with several
+ *    departments (transfers; a row that ends without one is a leaver) and hires per
+ *    year.
  *  - snapshot: employees with an open dept_emp row on the as-of date, grouped by
  *    department, gender and 5-year age band (count + summed tenure days).
  *  - title_gender: open titles rows on the as-of date by title and gender.
@@ -26,8 +26,11 @@ class WorkforceReports
 {
     public const KEYS = ['headcount', 'hires-leavers', 'tenure', 'gender', 'age'];
 
-    /** Counts of one department in one year; joined = first department row of an employee. */
-    private const NO_EVENTS = ['hires' => 0, 'joined' => 0, 'in' => 0, 'leavers' => 0, 'out' => 0];
+    /** Counts of one department in one year: department rows started and ended, transfers among them. */
+    private const NO_EVENTS = ['starts' => 0, 'ends' => 0, 'in' => 0, 'out' => 0];
+
+    /** Sort key of a dept_emp row within an employee's rows (from_date can repeat). */
+    private const ROW_KEY = 'CONCAT(de.from_date, de.to_date, de.dept_no)';
 
     public function __construct(
         private readonly ReportCache $cache,
@@ -107,7 +110,7 @@ class WorkforceReports
             $row = ['year' => (string) $year['year'], 'date' => $year['date']];
             foreach ($shown as $deptNo) {
                 $e = $byDepartment[$deptNo][$year['year']] ?? null;
-                $running[$deptNo] += $e === null ? 0 : $e['joined'] + $e['in'] - $e['leavers'] - $e['out'];
+                $running[$deptNo] += $e === null ? 0 : $e['starts'] - $e['ends'];
                 $row['d_'.$deptNo] = $running[$deptNo];
             }
             $row['total'] = $year['end'];
@@ -372,7 +375,7 @@ class WorkforceReports
      */
     private function yearly(ReportContext $context): array
     {
-        ['events' => $byDepartment, 'last_year' => $lastYear] = $this->movements($context);
+        ['events' => $byDepartment, 'hires' => $hires, 'last_year' => $lastYear] = $this->movements($context);
 
         $events = [];
         foreach ($byDepartment as $years) {
@@ -383,29 +386,30 @@ class WorkforceReports
             }
         }
 
-        if ($events === []) {
+        if ($events === [] && $hires === []) {
             return [];
         }
 
+        $years = [...array_keys($events), ...array_keys($hires)];
         $result = [];
         $headcount = 0;
-        $last = max([...array_keys($events), $lastYear ?? 0]);
-        for ($year = min(array_keys($events)); $year <= $last; $year++) {
+        for ($year = min($years), $last = max([...$years, $lastYear ?? 0]); $year <= $last; $year++) {
             $e = $events[$year] ?? self::NO_EVENTS;
+            $leavers = $e['ends'] - $e['out'];
             $start = $headcount;
-            $headcount += $e['joined'] + $e['in'] - $e['leavers'] - $e['out'];
+            $headcount += $e['starts'] - $e['ends'];
             $average = ($start + $headcount) / 2;
 
             $result[] = [
                 'year' => $year,
                 'date' => $year === $context->asOf->year ? $context->date() : $year.'-12-31',
-                'hires' => $e['hires'],
-                'leavers' => $e['leavers'],
+                'hires' => $hires[$year] ?? 0,
+                'leavers' => $leavers,
                 'in' => $e['in'],
                 'out' => $e['out'],
                 'start' => $start,
                 'end' => $headcount,
-                'turnover' => $average > 0 ? $e['leavers'] / $average * 100 : null,
+                'turnover' => $average > 0 ? $leavers / $average * 100 : null,
             ];
         }
 
@@ -413,69 +417,122 @@ class WorkforceReports
     }
 
     /**
-     * Department history events up to the as-of date (events: dept_no => year => counts)
-     * and the year of the company's last change on or before that date.
+     * History up to the as-of date: department rows started, ended and moved per
+     * department and year, hires per year and the year of the company's last change.
      *
-     * @return array{events: array<string, array<int, array{hires: int, joined: int, in: int, leavers: int, out: int}>>, last_year: ?int}
+     * @return array{events: array<string, array<int, array{starts: int, ends: int, in: int, out: int}>>, hires: array<int, int>, last_year: ?int}
      */
     private function movements(ReportContext $context): array
     {
         if ($context->seesNobody()) {
-            return ['events' => [], 'last_year' => null];
+            return ['events' => [], 'hires' => [], 'last_year' => null];
         }
 
         return $this->cache->remember('movements', $context, function () use ($context) {
             $date = $context->date();
-            $rowKey = 'CONCAT(%1$s.from_date, %1$s.to_date, %1$s.dept_no)';
-
-            // First and last dept_emp row of each employee (primary key order, no sorting).
-            $spans = DB::table('dept_emp as f')
-                ->select('f.emp_no')
-                ->selectRaw('MIN('.sprintf($rowKey, 'f').') AS first_row, MAX(f.to_date) AS last_to')
-                ->when($context->department !== null, fn ($q) => $q->whereIn('f.emp_no', fn ($in) => $in
-                    ->select('de_d.emp_no')->from('dept_emp as de_d')->where('de_d.dept_no', $context->department)))
-                ->groupBy('f.emp_no');
-            $context->constrain($spans, 'f.emp_no');
-
-            $isFirst = sprintf($rowKey, 'de').' = f.first_row';
-
-            $groups = DB::table('dept_emp as de')
-                ->joinSub($spans, 'f', 'f.emp_no', '=', 'de.emp_no')
-                ->join('employees as e', 'e.emp_no', '=', 'de.emp_no')
-                ->select('de.dept_no')
-                ->selectRaw('CASE WHEN de.from_date <= ? THEN YEAR(de.from_date) END AS start_year', [$date])
-                ->selectRaw('CASE WHEN de.to_date <= ? THEN YEAR(de.to_date) END AS end_year', [$date])
-                ->selectRaw("CASE WHEN {$isFirst} AND e.hire_date <= ? THEN YEAR(e.hire_date) END AS hire_year", [$date])
-                ->selectRaw("{$isFirst} AS is_first")
-                ->selectRaw('de.to_date = f.last_to AS is_last')
-                ->selectRaw('COUNT(*) AS n')
-                ->where(fn ($q) => $q->where('de.from_date', '<=', $date)->orWhere('e.hire_date', '<=', $date))
-                ->when($context->department !== null, fn ($q) => $q->where('de.dept_no', $context->department))
-                ->groupBy('de.dept_no', 'start_year', 'end_year', 'hire_year', 'is_first', 'is_last')
-                ->get();
-
             $result = [];
             $add = function (string $deptNo, int $year, string $kind, int $n) use (&$result) {
                 $result[$deptNo][$year] ??= self::NO_EVENTS;
                 $result[$deptNo][$year][$kind] += $n;
             };
 
-            foreach ($groups as $g) {
-                $n = (int) $g->n;
-                if ($g->start_year !== null) {
-                    $add($g->dept_no, (int) $g->start_year, $g->is_first ? 'joined' : 'in', $n);
-                }
+            $rows = DB::table('dept_emp as de')
+                ->select('de.dept_no')
+                ->selectRaw('YEAR(de.from_date) AS start_year')
+                ->selectRaw('CASE WHEN de.to_date <= ? THEN YEAR(de.to_date) END AS end_year', [$date])
+                ->selectRaw('COUNT(*) AS n')
+                ->where('de.from_date', '<=', $date)
+                ->when($context->department !== null, fn ($q) => $q->where('de.dept_no', $context->department))
+                ->groupBy('de.dept_no', 'start_year', 'end_year');
+            $context->constrain($rows, 'de.emp_no');
+
+            foreach ($rows->get() as $g) {
+                $add($g->dept_no, (int) $g->start_year, 'starts', (int) $g->n);
                 if ($g->end_year !== null) {
-                    $add($g->dept_no, (int) $g->end_year, $g->is_last ? 'leavers' : 'out', $n);
-                }
-                if ($g->hire_year !== null) {
-                    $add($g->dept_no, (int) $g->hire_year, 'hires', $n);
+                    $add($g->dept_no, (int) $g->end_year, 'ends', (int) $g->n);
                 }
             }
 
-            // Histories of all scopes run up to the last change in the company (not only in the department).
-            return ['events' => $result, 'last_year' => CompanyHistory::lastChangeYear($date)];
+            foreach ($this->transfers($context) as $g) {
+                if ($g->in_year !== null) {
+                    $add($g->dept_no, (int) $g->in_year, 'in', (int) $g->n);
+                }
+                if ($g->out_year !== null) {
+                    $add($g->dept_no, (int) $g->out_year, 'out', (int) $g->n);
+                }
+            }
+
+            return [
+                'events' => $result,
+                'hires' => $this->hires($context),
+                // Histories of all scopes run up to the last change in the company (not only in the department).
+                'last_year' => CompanyHistory::lastChangeYear($date),
+            ];
         });
+    }
+
+    /**
+     * Department rows that are not an employee's first (a transfer in) or last
+     * (a transfer out). Only employees with several rows matter: about a tenth.
+     *
+     * @return Collection<int, object>
+     */
+    private function transfers(ReportContext $context): Collection
+    {
+        $date = $context->date();
+        $spans = $this->firstAndLastRows($context)->havingRaw('COUNT(*) > 1');
+
+        return DB::table('dept_emp as de')
+            ->joinSub($spans, 'f', 'f.emp_no', '=', 'de.emp_no')
+            ->select('de.dept_no')
+            ->selectRaw('CASE WHEN de.from_date <= ? AND '.self::ROW_KEY.' <> f.first_row THEN YEAR(de.from_date) END AS in_year', [$date])
+            ->selectRaw('CASE WHEN de.to_date <= ? AND de.to_date <> f.last_to THEN YEAR(de.to_date) END AS out_year', [$date])
+            ->selectRaw('COUNT(*) AS n')
+            ->when($context->department !== null, fn ($q) => $q->where('de.dept_no', $context->department))
+            ->groupBy('de.dept_no', 'in_year', 'out_year')
+            ->get();
+    }
+
+    /**
+     * Hires per year: on employees.hire_date, which in the dataset is often earlier
+     * than the first department row. A department counts the employees who started in it.
+     *
+     * @return array<int, int>
+     */
+    private function hires(ReportContext $context): array
+    {
+        $date = $context->date();
+
+        $query = $context->department === null
+            ? DB::table('employees as e')
+            : DB::table('dept_emp as de')
+                ->join('employees as e', 'e.emp_no', '=', 'de.emp_no')
+                ->leftJoinSub($this->firstAndLastRows($context)->havingRaw('COUNT(*) > 1'), 'f', 'f.emp_no', '=', 'de.emp_no')
+                ->where('de.dept_no', $context->department)
+                ->where(fn ($q) => $q->whereNull('f.emp_no')->orWhereRaw(self::ROW_KEY.' = f.first_row'));
+
+        return $context->constrain($query, 'e.emp_no')
+            ->where('e.hire_date', '<=', $date)
+            ->selectRaw('YEAR(e.hire_date) AS hire_year, COUNT(*) AS n')
+            ->groupBy('hire_year')
+            ->pluck('n', 'hire_year')
+            ->map(fn ($n) => (int) $n)
+            ->all();
+    }
+
+    /**
+     * First and last dept_emp row per employee of the scope (primary key order, no sorting).
+     */
+    private function firstAndLastRows(ReportContext $context): Builder
+    {
+        $spans = DB::table('dept_emp as de')
+            ->select('de.emp_no')
+            ->selectRaw('MIN('.self::ROW_KEY.') AS first_row, MAX(de.to_date) AS last_to')
+            ->when($context->department !== null, fn ($q) => $q->whereIn('de.emp_no', fn ($in) => $in
+                ->select('de_d.emp_no')->from('dept_emp as de_d')->where('de_d.dept_no', $context->department)))
+            ->groupBy('de.emp_no');
+
+        return $context->constrain($spans, 'de.emp_no');
     }
 
     /**
