@@ -62,11 +62,33 @@ final class AuditLogPresenter
 
     /**
      * @param  array<string, string>  $departmentNames  dept_no => dept_name
+     * @param  array<string, string>  $employeeNames  emp_no => name, of the entries shown
      */
     public function __construct(
         private readonly array $departmentNames = [],
         private readonly bool $withSalaries = true,
+        private readonly array $employeeNames = [],
     ) {
+    }
+
+    /**
+     * The name of the record an entry is about, if it is known here.
+     */
+    public function subjectName(ActivityLog $entry): ?string
+    {
+        return match ($entry->subject_type) {
+            ActivityLog::SUBJECT_EMPLOYEE => $this->employeeNames[$entry->subject_id] ?? null,
+            ActivityLog::SUBJECT_DEPARTMENT => $this->departmentNames[$entry->subject_id] ?? null,
+            default => null,
+        };
+    }
+
+    /**
+     * What to call the record of an entry: its name, or its id.
+     */
+    public function subjectTitle(ActivityLog $entry): string
+    {
+        return $this->subjectName($entry) ?? ($entry->subject_id !== null ? '#'.$entry->subject_id : '-');
     }
 
     /**

@@ -16,9 +16,6 @@
             <i class="bi bi-journal-text me-2 text-primary"></i>{{ __('Audit log') }}
         </h1>
 
-        @php
-            $actionGroups = collect($actions)->groupBy(fn ($action) => \Illuminate\Support\Str::before($action, '.'));
-        @endphp
         <div class="card mb-4">
             <div class="card-body">
                 <form method="GET" action="{{ route('audit-log.index') }}" class="row g-2 align-items-end">
@@ -27,7 +24,7 @@
                         <select id="filter_action" name="action" class="form-select">
                             <option value="">{{ __('All actions') }}</option>
                             @foreach ($actionGroups as $group => $groupActions)
-                                <optgroup label="{{ \Illuminate\Support\Str::ucfirst($group) }}">
+                                <optgroup label="{{ $presenter::subjectLabel($group) }}">
                                     <option value="{{ $group }}.*" @selected(($filters['action'] ?? null) === $group . '.*')>
                                         {{ __('All :group actions', ['group' => $group]) }}
                                     </option>
@@ -58,7 +55,7 @@
                         <label for="filter_user" class="form-label fw-semibold text-body-emphasis">{{ __('User') }}</label>
                         <select id="filter_user" name="user" class="form-select">
                             <option value="">{{ __('Anyone') }}</option>
-                            <option value="{{ \App\Http\Controllers\AuditLogController::NO_USER }}" @selected(($filters['user'] ?? null) === \App\Http\Controllers\AuditLogController::NO_USER)>
+                            <option value="{{ $noUser }}" @selected(($filters['user'] ?? null) === $noUser)>
                                 {{ __('No user (system, failed sign-ins)') }}
                             </option>
                             @foreach ($users as $user)
@@ -103,9 +100,6 @@
                         </thead>
                         <tbody>
                             @forelse ($entries as $entry)
-                                @php
-                                    $subjectUrl = $presenter::subjectUrl($entry->subject_type, $entry->subject_id);
-                                @endphp
                                 <tr>
                                     <td class="small text-nowrap">
                                         {{ $entry->created_at->format('d.m.Y') }}<br>
@@ -130,19 +124,12 @@
                                     </td>
                                     <td class="small">
                                         <div class="text-body-secondary">{{ $presenter::subjectLabel($entry->subject_type) }}</div>
-                                        @php
-                                            $subjectName = match ($entry->subject_type) {
-                                                'employee' => $employeeNames[$entry->subject_id] ?? null,
-                                                'department' => $departmentNames[$entry->subject_id] ?? null,
-                                                default => null,
-                                            };
-                                        @endphp
-                                        @if ($subjectUrl)
-                                            <a href="{{ $subjectUrl }}" class="fw-semibold">{{ $subjectName ?? '#' . $entry->subject_id }}</a>
+                                        @if ($presenter::subjectUrl($entry->subject_type, $entry->subject_id))
+                                            <a href="{{ $presenter::subjectUrl($entry->subject_type, $entry->subject_id) }}" class="fw-semibold">{{ $presenter->subjectTitle($entry) }}</a>
                                         @else
-                                            <span class="fw-semibold">{{ $subjectName ?? ($entry->subject_id !== null ? '#' . $entry->subject_id : '-') }}</span>
+                                            <span class="fw-semibold">{{ $presenter->subjectTitle($entry) }}</span>
                                         @endif
-                                        @if ($subjectName && $entry->subject_id !== null)
+                                        @if ($presenter->subjectName($entry) && $entry->subject_id !== null)
                                             <span class="text-body-secondary">#{{ $entry->subject_id }}</span>
                                         @endif
                                         <div>

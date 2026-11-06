@@ -107,7 +107,7 @@ class PersonalDataTest extends HrOperationsTestCase
             ->put(route('employees.update', $employee->emp_no), $this->payload($employee, ['hire_date' => '1995-03-02']))
             ->assertOk()
             ->assertSee('The hire date cannot be after the start of the employment history (01.03.1995).')
-            ->assertSee('getElementById("personalModal")', false);
+            ->assertSee('data-open-modal="personalModal"', false);
     }
 
     public function test_unknown_employee_is_404(): void

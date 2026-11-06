@@ -1,10 +1,9 @@
 {{-- The `changes` of one audit entry as "field: before -> after" ($presenter: App\Support\AuditLogPresenter) --}}
-@php($rows = $presenter->rows($changes))
-@if ($rows === [])
+@if ($presenter->rows($changes) === [])
     <span class="text-body-secondary small">-</span>
 @else
     <dl class="audit-changes small mb-0">
-        @foreach ($rows as $row)
+        @foreach ($presenter->rows($changes) as $row)
             <div class="d-flex flex-wrap column-gap-1">
                 <dt class="fw-semibold text-body-emphasis">{{ $row['field'] }}:</dt>
                 <dd class="mb-0 text-break">

@@ -46,6 +46,7 @@ class EmployeeOperationsController extends Controller
             'titleOptions' => $this->operations->titleOptions(),
             'today' => EmploymentRules::today(),
             'formToken' => (string) Str::uuid(),
+            'rules' => EmploymentRules::class,
         ]);
     }
 

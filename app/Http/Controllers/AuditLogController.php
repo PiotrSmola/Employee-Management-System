@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 use Illuminate\View\View;
 
 /**
@@ -74,16 +75,20 @@ class AuditLogController extends Controller
         return view('audit-log.index', [
             'entries' => $entries,
             'filters' => $filters,
-            'actions' => $actions,
+            'actionGroups' => collect($actions)->groupBy(fn (string $action) => Str::before($action, '.')),
+            'noUser' => self::NO_USER,
             'subjectTypes' => $subjectTypes,
             'users' => User::query()->orderBy('name')->get(['id', 'name', 'email']),
-            'employeeNames' => $employeeIds === [] ? collect() : Employee::query()
-                ->whereIn('emp_no', $employeeIds)
-                ->get(['emp_no', 'first_name', 'last_name'])
-                ->mapWithKeys(fn (Employee $e) => [(string) $e->emp_no => $e->first_name.' '.$e->last_name]),
-            'departmentNames' => $departmentNames,
             'undoneBy' => ActivityLog::undoEntriesFor($entries->getCollection()),
-            'presenter' => new AuditLogPresenter($departmentNames, EmployeeVisibility::for($request->user())->canSeeSalaries()),
+            'presenter' => new AuditLogPresenter(
+                $departmentNames,
+                EmployeeVisibility::for($request->user())->canSeeSalaries(),
+                $employeeIds === [] ? [] : Employee::query()
+                    ->whereIn('emp_no', $employeeIds)
+                    ->get(['emp_no', 'first_name', 'last_name'])
+                    ->mapWithKeys(fn (Employee $e) => [(string) $e->emp_no => $e->first_name.' '.$e->last_name])
+                    ->all(),
+            ),
         ]);
     }
 

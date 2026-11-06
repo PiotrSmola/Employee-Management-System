@@ -1,32 +1,9 @@
 {{--
     HR actions of the employee profile (App\View\Components\EmployeeActions, only rendered for
     `manage-employees`). Every form is a modal posting to EmployeeOperationsController; on a
-    validation error the profile comes back with the errors in the form's own bag and the
-    script at the bottom opens that modal again.
+    validation error the profile comes back with the errors in the form's own bag and
+    public/js/employee-actions.js opens that modal again.
 --}}
-@php
-    $rules = \App\Support\EmploymentRules::class;
-    $name = trim($employee->first_name . ' ' . $employee->last_name);
-    $modals = [
-        'personal' => 'personalModal',
-        'transfer' => 'transferModal',
-        'title' => 'titleModal',
-        'salary' => 'salaryModal',
-        'terminate' => 'terminateModal',
-        'rehire' => 'rehireModal',
-        'correctSalary' => 'correctSalaryModal',
-        'correctTitle' => 'correctTitleModal',
-        'undo' => 'undoModal',
-    ];
-    $openModal = collect($modals)->first(fn ($modal, $bag) => $errors->getBag($bag)->any());
-    // Old input only for the form that failed (the forms share field names).
-    $old = fn (string $bag, string $key, $default = null) => $errors->getBag($bag)->any() ? old($key, $default) : $default;
-    $invalid = fn (string $bag, string $key) => $errors->getBag($bag)->has($key) ? 'is-invalid' : '';
-    $deptName = fn (string $no) => $departmentNames[$no] ?? $no;
-    $possible = fn (?string $min) => $min === null || $min <= $today;
-    $hireMax = $minDates['hire'] !== null && $minDates['hire'] < $today ? $minDates['hire'] : $today;
-    $undoPresenter = new \App\Support\AuditLogPresenter($departmentNames->all());
-@endphp
 
 <div class="row mb-4">
     <div class="col-12">
@@ -131,10 +108,9 @@
                     </div>
                     <div class="col-sm-4">
                         <label for="hr_gender" class="form-label fw-semibold">{{ __('Gender') }}</label>
-                        @php($gender = $old('personal', 'gender', $employee->gender))
                         <select id="hr_gender" name="gender" class="form-select {{ $invalid('personal', 'gender') }}" required>
-                            <option value="M" @selected($gender === 'M')>{{ __('Male') }}</option>
-                            <option value="F" @selected($gender === 'F')>{{ __('Female') }}</option>
+                            <option value="M" @selected($old('personal', 'gender', $employee->gender) === 'M')>{{ __('Male') }}</option>
+                            <option value="F" @selected($old('personal', 'gender', $employee->gender) === 'F')>{{ __('Female') }}</option>
                         </select>
                     </div>
                     <div class="col-sm-4">
@@ -177,30 +153,27 @@
                     @include('employees.partials.hr-errors', ['bag' => 'transfer'])
                     <p class="mb-3">
                         {{ __('Current department') }}:
-                        <span class="fw-semibold">{{ collect($currentDepartments)->map($deptName)->implode(', ') }}</span>
+                        <span class="fw-semibold">{{ $currentDepartmentNames }}</span>
                     </p>
                     @if ($managedDepartments !== [])
                         <div class="alert alert-warning small" role="alert">
                             <i class="bi bi-exclamation-triangle me-1"></i>
                             {{ __(':name is the current manager of :department. The management ends on the transfer date - the department has no current manager until a new one is assigned.', [
                                 'name' => $name,
-                                'department' => collect($managedDepartments)->map($deptName)->implode(', '),
+                                'department' => $managedDepartmentNames,
                             ]) }}
                         </div>
                     @endif
                     <div class="mb-3">
                         <label for="hr_transfer_dept" class="form-label fw-semibold">{{ __('New department') }}</label>
-                        @php($selectedDept = $old('transfer', 'dept_no'))
                         <select id="hr_transfer_dept" name="dept_no" class="form-select {{ $invalid('transfer', 'dept_no') }}" required>
                             <option value="">{{ __('Choose a department...') }}</option>
                             @foreach ($departments as $department)
-                                @php($held = in_array($department->dept_no, $heldDepartments, true))
-                                @php($isCurrentDept = in_array($department->dept_no, $currentDepartments, true))
-                                <option value="{{ $department->dept_no }}" @selected($selectedDept === $department->dept_no) @disabled($isCurrentDept)>
+                                <option value="{{ $department->dept_no }}" @selected($old('transfer', 'dept_no') === $department->dept_no) @disabled($isCurrentDepartment($department->dept_no))>
                                     {{ $department->dept_name }}
-                                    @if ($isCurrentDept)
+                                    @if ($isCurrentDepartment($department->dept_no))
                                         ({{ __('current') }})
-                                    @elseif ($held)
+                                    @elseif ($wasHeld($department->dept_no))
                                         ({{ __('return - worked here before') }})
                                     @endif
                                 </option>
@@ -232,10 +205,9 @@
                     <p class="mb-3">{{ __('Current job title') }}: <span class="fw-semibold">{{ $currentTitle ?? '-' }}</span></p>
                     <div class="mb-3">
                         <span class="form-label fw-semibold d-block">{{ __('Kind of change') }}</span>
-                        @php($kind = $old('title', 'kind', 'promotion'))
                         <div class="btn-group flex-wrap" role="group" aria-label="{{ __('Kind of change') }}">
                             @foreach (['promotion' => __('Promotion'), 'demotion' => __('Demotion'), 'change' => __('Other change')] as $value => $label)
-                                <input type="radio" class="btn-check" name="kind" id="hr_kind_{{ $value }}" value="{{ $value }}" autocomplete="off" @checked($kind === $value)>
+                                <input type="radio" class="btn-check" name="kind" id="hr_kind_{{ $value }}" value="{{ $value }}" autocomplete="off" @checked($old('title', 'kind', 'promotion') === $value)>
                                 <label class="btn btn-outline-primary" for="hr_kind_{{ $value }}">{{ $label }}</label>
                             @endforeach
                         </div>
@@ -259,7 +231,7 @@
     <div class="modal fade" id="salaryModal" tabindex="-1" aria-labelledby="salaryModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
             <form method="POST" action="{{ route('employees.salary', $employee->emp_no) }}" class="modal-content" novalidate
-                data-current-salary="{{ $currentSalary ?? '' }}" id="hrSalaryForm">
+                data-current-salary="{{ $currentSalary ?? '' }}" data-preview-label="{{ __('New salary') }}" id="hrSalaryForm">
                 @csrf
                 <div class="modal-header">
                     <h5 class="modal-title" id="salaryModalLabel"><i class="bi bi-cash-coin me-2"></i>{{ __('Change salary') }}</h5>
@@ -271,11 +243,10 @@
                         {{ __('Current salary') }}:
                         <span class="fw-semibold">{{ $currentSalary !== null ? number_format($currentSalary) . ' USD' : '-' }}</span>
                     </p>
-                    @php($mode = $old('salary', 'mode', 'amount'))
                     <div class="btn-group mb-3" role="group" aria-label="{{ __('Enter the change as') }}">
-                        <input type="radio" class="btn-check" name="mode" id="hr_mode_amount" value="amount" autocomplete="off" @checked($mode === 'amount')>
+                        <input type="radio" class="btn-check" name="mode" id="hr_mode_amount" value="amount" autocomplete="off" @checked($old('salary', 'mode', 'amount') === 'amount')>
                         <label class="btn btn-outline-primary" for="hr_mode_amount">{{ __('New amount') }}</label>
-                        <input type="radio" class="btn-check" name="mode" id="hr_mode_percent" value="percent" autocomplete="off" @checked($mode === 'percent')>
+                        <input type="radio" class="btn-check" name="mode" id="hr_mode_percent" value="percent" autocomplete="off" @checked($old('salary', 'mode', 'amount') === 'percent')>
                         <label class="btn btn-outline-primary" for="hr_mode_percent">{{ __('Change in %') }}</label>
                     </div>
                     <div class="mb-3" data-salary-mode="amount">
@@ -322,7 +293,7 @@
                     @include('employees.partials.hr-errors', ['bag' => 'terminate'])
                     <p>{{ __('On the end date these current records of :name are closed:', ['name' => $name]) }}</p>
                     <ul class="small">
-                        <li>{{ __('Department') }}: {{ collect($currentDepartments)->map($deptName)->implode(', ') }}</li>
+                        <li>{{ __('Department') }}: {{ $currentDepartmentNames }}</li>
                         @if ($currentTitle)
                             <li>{{ __('Job title') }}: {{ $currentTitle }}</li>
                         @endif
@@ -330,7 +301,7 @@
                             <li>{{ __('Salary') }}: {{ number_format($currentSalary) }} USD</li>
                         @endif
                         @if ($allManagedDepartments !== [])
-                            <li class="text-warning-emphasis">{{ __('Management of') }} {{ collect($allManagedDepartments)->map($deptName)->implode(', ') }}</li>
+                            <li class="text-warning-emphasis">{{ __('Management of') }} {{ $allManagedDepartmentNames }}</li>
                         @endif
                     </ul>
                     @include('employees.partials.hr-date', ['bag' => 'terminate', 'field' => 'end_date', 'label' => __('End date'), 'min' => $minDates['terminate']])
@@ -364,13 +335,11 @@
                     <div class="row g-3">
                         <div class="col-12">
                             <label for="hr_rehire_dept" class="form-label fw-semibold">{{ __('Department') }}</label>
-                            @php($selectedDept = $old('rehire', 'dept_no'))
                             <select id="hr_rehire_dept" name="dept_no" class="form-select {{ $invalid('rehire', 'dept_no') }}" required>
                                 <option value="">{{ __('Choose a department...') }}</option>
                                 @foreach ($departments as $department)
-                                    @php($held = in_array($department->dept_no, $heldDepartments, true))
-                                    <option value="{{ $department->dept_no }}" @selected($selectedDept === $department->dept_no)>
-                                        {{ $department->dept_name }}@if ($held) ({{ __('return - worked here before') }})@endif
+                                    <option value="{{ $department->dept_no }}" @selected($old('rehire', 'dept_no') === $department->dept_no)>
+                                        {{ $department->dept_name }}@if ($wasHeld($department->dept_no)) ({{ __('return - worked here before') }})@endif
                                     </option>
                                 @endforeach
                             </select>
@@ -500,7 +469,7 @@
                     </p>
                     @include('audit-log.partials.changes', ['changes' => $undoable->changes, 'presenter' => $undoPresenter])
                     <p class="small text-body-secondary mt-3 mb-0">
-                        {{ __('Undoing restores the records exactly as they were before this change: closed records are reopened and the records it added are removed. Only the most recent change can be undone, within :hours hours and only while nothing else was changed for this employee. The undo is recorded in the audit log.', ['hours' => \App\Services\EmployeeOperationsService::UNDO_HOURS]) }}
+                        {{ __('Undoing restores the records exactly as they were before this change: closed records are reopened and the records it added are removed. Only the most recent change can be undone, within :hours hours and only while nothing else was changed for this employee. The undo is recorded in the audit log.', ['hours' => $undoHours]) }}
                     </p>
                 </div>
                 <div class="modal-footer">
@@ -512,51 +481,5 @@
     </div>
 @endif
 
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        const salaryForm = document.getElementById('hrSalaryForm');
-        if (salaryForm) {
-            const current = parseInt(salaryForm.dataset.currentSalary, 10);
-            const amount = salaryForm.querySelector('[name="salary"]');
-            const percent = salaryForm.querySelector('[name="percent"]');
-            const preview = document.getElementById('hrSalaryPreview');
-            const format = (value) => value.toLocaleString('en-US');
-
-            const update = function() {
-                const mode = salaryForm.querySelector('[name="mode"]:checked')?.value || 'amount';
-                salaryForm.querySelectorAll('[data-salary-mode]').forEach(function(group) {
-                    const active = group.dataset.salaryMode === mode;
-                    group.classList.toggle('d-none', !active);
-                    group.querySelectorAll('input').forEach((input) => input.disabled = !active);
-                });
-
-                let next = null;
-                if (mode === 'percent' && percent.value !== '' && !isNaN(current)) {
-                    next = Math.round(current * (100 + parseFloat(percent.value)) / 100);
-                } else if (mode === 'amount' && amount.value !== '') {
-                    next = parseInt(amount.value, 10);
-                }
-
-                if (next === null || isNaN(next) || isNaN(current)) {
-                    preview.textContent = '';
-                    return;
-                }
-                const diff = next - current;
-                const pct = current ? (diff / current * 100).toFixed(2) : '0';
-                preview.textContent = @json(__('New salary')) + ': ' + format(next) + ' USD (' + (diff >= 0 ? '+' : '') + format(diff) + ', ' + (diff >= 0 ? '+' : '') + pct + ' %)';
-            };
-
-            salaryForm.querySelectorAll('[name="mode"]').forEach((radio) => radio.addEventListener('change', update));
-            amount.addEventListener('input', update);
-            percent.addEventListener('input', update);
-            update();
-        }
-
-        @if ($openModal)
-            const failed = document.getElementById(@json($openModal));
-            if (failed && window.bootstrap) {
-                bootstrap.Modal.getOrCreateInstance(failed).show();
-            }
-        @endif
-    });
-</script>
+<div id="hrActionsState" data-open-modal="{{ $openModal }}" hidden></div>
+<script src="{{ asset('js/employee-actions.js') }}" defer></script>

@@ -1,4 +1,3 @@
-@php($rules = \App\Support\EmploymentRules::class)
 @include('layouts.html')
 @include('layouts.head', ['pageTitle' => __('Add employee') . ' - Employee Management System'])
 
