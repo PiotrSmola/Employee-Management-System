@@ -252,7 +252,7 @@ class DepartmentManagerAssignmentTest extends TestCase
         $this->assertSame([], $names('%'));
 
         $first = $this->getJson(route('departments.managers.candidates', ['department' => 'd005', 'q' => 'Engineer']))->json('data.0');
-        $this->assertSame(['emp_no' => $this->engineer->emp_no, 'name' => 'Ed Engineer', 'title' => 'Engineer', 'since' => '1994-01-01', 'manager' => null], $first);
+        $this->assertSame(['emp_no' => $this->engineer->emp_no, 'name' => 'Ed Engineer', 'title' => 'Engineer', 'since' => '01.01.1994', 'manager' => null], $first);
     }
 
     public function test_candidate_search_by_number_and_by_several_words(): void

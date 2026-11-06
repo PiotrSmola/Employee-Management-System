@@ -7,6 +7,7 @@ use App\Http\Requests\Departments\EndManagementRequest;
 use App\Models\Department;
 use App\Queries\DepartmentMemberSearch;
 use App\Services\DepartmentManagementService;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -31,7 +32,7 @@ class DepartmentManagerController extends Controller
                 'emp_no' => $row->emp_no,
                 'name' => $row->first_name.' '.$row->last_name,
                 'title' => $row->title,
-                'since' => $row->since,
+                'since' => Carbon::parse($row->since)->format('d.m.Y'),
                 'manager' => $row->manager,
             ])->values(),
         ]);

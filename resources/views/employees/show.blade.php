@@ -159,9 +159,9 @@
                             </h5>
                         </div>
                         <div class="card-body">
-                            <canvas id="salaryChart" height="100" data-points="{{ $salaryChartData->toJson() }}"
+                            <div class="salary-chart"><canvas id="salaryChart" data-points="{{ $salaryChartData->toJson() }}"
                                 data-dataset-label="{{ __('Average salary (USD)') }}" data-tooltip-label="{{ __('Average salary') }}"
-                                data-year-label="{{ __('Year') }}"></canvas>
+                                data-year-label="{{ __('Year') }}"></canvas></div>
                         </div>
                     </div>
                 </div>
