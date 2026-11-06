@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\Reports;
 
+use App\Models\DeptEmp;
+use App\Models\Employee;
 use App\Models\User;
 use App\Reports\ReportContext;
 use App\Reports\ReportTable;
@@ -76,6 +78,30 @@ class WorkforceReportsTest extends TestCase
         $this->assertEqualsWithDelta(100 / 3, $rows[1993]['turnover'], 1e-9);
         $this->assertEqualsWithDelta(0.0, $rows[1990]['turnover'], 1e-9);
         $this->assertSame([1, 0, 4], [$rows[1994]['hires'], $rows[1994]['leavers'], $rows[1994]['end']]);
+    }
+
+    public function test_hires_use_the_hire_date_even_when_the_first_department_row_starts_later(): void
+    {
+        $late = Employee::factory()->create(['hire_date' => '1995-03-01', 'gender' => 'F', 'birth_date' => '1970-01-01']);
+        DeptEmp::create(['emp_no' => $late->emp_no, 'dept_no' => 'd001', 'from_date' => '1996-02-01', 'to_date' => '9999-01-01']);
+
+        $rows = $this->rowsBy($this->reports->hiresAndLeavers($this->context()), 'year');
+        $this->assertSame([1, 4, 4], [$rows[1995]['hires'], $rows[1995]['start'], $rows[1995]['end']]);
+        $this->assertSame([0, 4, 5], [$rows[1996]['hires'], $rows[1996]['start'], $rows[1996]['end']]);
+
+        // Hired, but not in a department yet on the as-of date.
+        $asOf = $this->rowsBy($this->reports->hiresAndLeavers($this->context(asOf: '1995-06-30')), 'year');
+        $this->assertSame([1, 4], [$asOf[1995]['hires'], $asOf[1995]['end']]);
+    }
+
+    public function test_two_department_rows_starting_on_the_same_day_are_one_hire(): void
+    {
+        $employee = Employee::factory()->create(['hire_date' => '1996-05-01']);
+        DeptEmp::create(['emp_no' => $employee->emp_no, 'dept_no' => 'd001', 'from_date' => '1996-05-01', 'to_date' => '1996-05-01']);
+        DeptEmp::create(['emp_no' => $employee->emp_no, 'dept_no' => 'd002', 'from_date' => '1996-05-01', 'to_date' => '9999-01-01']);
+
+        $rows = $this->rowsBy($this->reports->hiresAndLeavers($this->context()), 'year');
+        $this->assertSame(1, $rows[1996]['hires']);
     }
 
     public function test_as_of_date_cuts_the_history_on_that_day(): void

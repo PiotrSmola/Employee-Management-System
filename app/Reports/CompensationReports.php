@@ -13,11 +13,10 @@ use Illuminate\Support\Facades\DB;
  * Salaries on the as-of date D are the salaries rows open on D (from_date <= D <
  * to_date), with the department and title open on D. Cached aggregates:
  *
- *  - salary_snapshot: one statement over the joined salaries: a GROUP BY
- *    (department, title, gender, 10k salary band) with count, sum, min and max -
- *    every average, minimum, maximum, histogram and pay gap is summed up from it -
- *    and exact medians (window functions; only the middle rows of each department,
- *    title and the whole scope leave the database);
+ *  - salary_snapshot: groups of (department, title, gender, 10k salary band) with
+ *    count, sum, min and max - every average, minimum, maximum, histogram and pay
+ *    gap is summed up from them - and exact medians per department, per title and
+ *    overall;
  *  - salary_growth: salaries rows grouped by start and end year (intersected
  *    with the department rows for a department scope); the average on 31 Dec
  *    of each year is (sum of started - sum of ended) / (count started - count ended).
@@ -379,9 +378,12 @@ class CompensationReports
     }
 
     /**
-     * Summary groups and medians of the salaries on the as-of date, from one
-     * statement: the join runs once (the CTE is used twice, so it is materialized)
-     * and only the groups and the middle rows of each partition leave the database.
+     * Summary groups and medians of the salaries on the as-of date.
+     *
+     * One pass over the open salaries (about 240k rows in the full dataset, read
+     * with a cursor) instead of SQL aggregation: medians in MySQL need a sort per
+     * partition, and with the default sort buffer and temporary table sizes those
+     * sorts go to disk and take far longer than the join itself.
      *
      * @return array{summary: list<array<string, mixed>>, medians: array{departments: array<string, float>, titles: array<string, float>, overall: ?float}}
      */
@@ -392,71 +394,52 @@ class CompensationReports
         }
 
         return $this->cache->remember('salary_snapshot', $context, function () use ($context) {
-            $base = $this->base($context)->selectRaw('de.dept_no, t.title, e.gender, s.salary');
+            $rows = $this->base($context)
+                ->selectRaw("de.dept_no, COALESCE(t.title, '') AS title, e.gender, s.salary")
+                ->cursor();
 
-            // The middle row (odd count) or the two middle rows (even count) of each partition.
-            $middle = fn (string $p) => "x.rn_{$p} IN (FLOOR((x.n_{$p} + 1) / 2), FLOOR(x.n_{$p} / 2) + 1)";
-
-            $rows = DB::select(
-                'WITH b AS ('.$base->toSql().')
-                SELECT 0 AS is_median, dept_no, title, gender, FLOOR(salary / ?) AS band, COUNT(*) AS n,
-                    SUM(salary) AS total, MIN(salary) AS min_salary, MAX(salary) AS max_salary,
-                    0 AS rn_d, 0 AS n_d, 0 AS rn_t, 0 AS n_t, 0 AS rn_a, 0 AS n_a
-                FROM b GROUP BY dept_no, title, gender, band
-                UNION ALL
-                SELECT 1, x.dept_no, x.title, NULL, NULL, NULL, x.salary, NULL, NULL,
-                    x.rn_d, x.n_d, x.rn_t, x.n_t, x.rn_a, x.n_a
-                FROM (
-                    SELECT b.dept_no, b.title, b.salary,
-                        ROW_NUMBER() OVER (PARTITION BY b.dept_no ORDER BY b.salary) AS rn_d, COUNT(*) OVER (PARTITION BY b.dept_no) AS n_d,
-                        ROW_NUMBER() OVER (PARTITION BY b.title ORDER BY b.salary) AS rn_t, COUNT(*) OVER (PARTITION BY b.title) AS n_t,
-                        ROW_NUMBER() OVER (ORDER BY b.salary) AS rn_a, COUNT(*) OVER () AS n_a
-                    FROM b
-                ) x
-                WHERE '.$middle('d').' OR '.$middle('t').' OR '.$middle('a'),
-                [...$base->getBindings(), self::BAND]
-            );
-
-            $summary = [];
-            $middles = ['departments' => [], 'titles' => [], 'overall' => []];
-            $isMiddle = fn (int $rn, int $n) => $rn === intdiv($n + 1, 2) || $rn === intdiv($n, 2) + 1;
+            $groups = [];
+            $departments = [];
+            $titles = [];
+            $all = [];
 
             foreach ($rows as $r) {
-                if (! $r->is_median) {
-                    $summary[] = [
-                        'dept_no' => $r->dept_no,
-                        'title' => (string) $r->title,
-                        'gender' => $r->gender,
-                        'band' => (int) $r->band,
-                        'n' => (int) $r->n,
-                        'sum' => (int) $r->total,
-                        'min' => (int) $r->min_salary,
-                        'max' => (int) $r->max_salary,
-                    ];
+                $salary = (int) $r->salary;
+                $band = (int) floor($salary / self::BAND);
+                $key = "{$r->dept_no}|{$r->title}|{$r->gender}|{$band}";
 
-                    continue;
-                }
+                $group = $groups[$key] ?? [
+                    'dept_no' => $r->dept_no, 'title' => $r->title, 'gender' => $r->gender, 'band' => $band,
+                    'n' => 0, 'sum' => 0, 'min' => $salary, 'max' => $salary,
+                ];
+                $group['n']++;
+                $group['sum'] += $salary;
+                $group['min'] = min($group['min'], $salary);
+                $group['max'] = max($group['max'], $salary);
+                $groups[$key] = $group;
 
-                $salary = (int) $r->total;
-                if ($isMiddle((int) $r->rn_d, (int) $r->n_d)) {
-                    $middles['departments'][$r->dept_no][] = $salary;
-                }
-                if ($isMiddle((int) $r->rn_t, (int) $r->n_t)) {
-                    $middles['titles'][(string) $r->title][] = $salary;
-                }
-                if ($isMiddle((int) $r->rn_a, (int) $r->n_a)) {
-                    $middles['overall'][] = $salary;
-                }
+                $departments[$r->dept_no][] = $salary;
+                $titles[$r->title][] = $salary;
+                $all[] = $salary;
             }
 
-            $average = fn (array $values) => array_sum($values) / count($values);
-
-            return ['summary' => $summary, 'medians' => [
-                'departments' => array_map($average, $middles['departments']),
-                'titles' => array_map($average, $middles['titles']),
-                'overall' => $middles['overall'] === [] ? null : $average($middles['overall']),
+            return ['summary' => array_values($groups), 'medians' => [
+                'departments' => array_map(self::median(...), $departments),
+                'titles' => array_map(self::median(...), $titles),
+                'overall' => $all === [] ? null : self::median($all),
             ]];
         });
+    }
+
+    /**
+     * @param  non-empty-list<int>  $values
+     */
+    private static function median(array $values): float
+    {
+        sort($values);
+        $n = count($values);
+
+        return ($values[intdiv($n - 1, 2)] + $values[intdiv($n, 2)]) / 2;
     }
 
     /**
