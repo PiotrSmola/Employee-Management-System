@@ -1,12 +1,13 @@
 <?php
 
+use App\Http\Controllers\AuditLogController;
 use App\Http\Controllers\EmployeeOperationsController;
 use App\Support\Ability;
 use Illuminate\Support\Facades\Route;
 
 /*
 | HR operations on employees (hire, personal data, transfer, title / salary changes,
-| termination, rehire, corrections). Loaded inside the
+| termination, rehire, corrections) and the audit log. Loaded inside the
 | authenticated group of routes/web.php; see docs/HR_OPERATIONS.md.
 */
 
@@ -26,3 +27,6 @@ Route::middleware('can:'.Ability::MANAGE_EMPLOYEES)->group(function () {
     });
 });
 
+Route::get('/audit-log', [AuditLogController::class, 'index'])
+    ->middleware('can:'.Ability::VIEW_AUDIT_LOG)
+    ->name('audit-log.index');

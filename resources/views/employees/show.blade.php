@@ -254,6 +254,10 @@
             </div>
         </div>
 
+        @can('view-audit-log')
+            <x-employee-change-history :employee="$employee" />
+        @endcan
+
         <div class="row mt-4">
             <div class="col-12 text-center">
                 <a href="{{ route('employees.index') }}" class="btn btn-outline-primary me-3">
