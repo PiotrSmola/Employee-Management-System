@@ -104,8 +104,9 @@ docker compose --env-file .env.docker exec app php artisan <command>
 After code changes, run the start script again – it rebuilds the app image.
 
 On start the app container runs `php artisan migrate`. On the imported dataset the
-schema migrations are no-ops; the first run adds the directory indexes online
-(roughly 45 s on the full dataset, the tables stay usable meanwhile). It then runs the
+schema migrations are no-ops; the first run adds the directory indexes and rebuilds the
+history tables' primary keys for `void_log_id` online (roughly 45 s and 2.5 minutes on the
+full dataset, the tables stay usable meanwhile). It then runs the
 `UserSeeder`, which creates the initial accounts if they do not exist yet (see
 [Accounts and Roles](#accounts-and-roles)). Set `ADMIN_EMAIL` / `ADMIN_PASSWORD`
 (and `SEED_DEMO_USERS=false` to skip the demo accounts) in `.env.docker` before the first start.
@@ -428,37 +429,40 @@ The directory has to stay fast on ~300k employees / ~2.8M salary rows:
 - **Caching**: 15-minute cache for dashboard statistics, 30-minute cache for department data;
   department figures and reports are precomputed (below).
 
-Typical timings on the full dataset (Docker, warm-ish cache): unfiltered list ~0.1 s,
-single filters and sorts 0.1–0.6 s, combined filters up to ~2 s, full CSV export of all
-300k employees ~50 s (streamed).
+Timings below were measured on the full dataset on an idle server with the default 128 MB
+InnoDB buffer pool (`php artisan serve`). The Docker setup has 1 GB, so these are upper bounds:
 
-Department figures are cached (15 minutes for the index, 30 for a department), so the pages
-render in about 0.1 s. They are refreshed by `php artisan departments:warm` (hourly, needs the
-scheduler: `php artisan schedule:run` every minute) and otherwise after the response of a reader,
-who gets the last good copy meanwhile. Only the very first visit, with nothing cached, computes
-them or says they are being prepared. Salary figures are read from the `(to_date, salary)` index
-instead of through each employee's salary history.
+| Page | First visit, nothing cached | Next visits | After a change of the data |
+|------|-----------------------------|-------------|----------------------------|
+| Dashboard | 1.7 s | 0.1 s | – |
+| Directory | 0.6 s | 0.4-0.5 s | – |
+| Profile | 0.6 s | 0.2-0.4 s | – |
+| Departments | 10.6 s | 0.1 s | 0.15 s, last good figures |
+| Department page | 6.8 s | 0.1 s | 0.25 s, last good figures |
+| Workforce report | 21.5 s | 0.1 s | 0.2 s, last good figures |
+| Compensation report | 35.5 s | 0.1 s | 0.15 s, last good figures |
 
-Reports are served from the cache (about 0.1 s per page). A page whose figures are not cached
-yet computes them in the request: on the full dataset 5-11 s for a workforce page and 9-22 s for a
-compensation page on an idle server, several times that while the database is busy (the default
-128 MB InnoDB buffer pool is smaller than the dataset, so a larger pool helps most).
-`php artisan reports:warm` computes the current state of all 19 scopes ahead of the visitors, in
-about 3.5 minutes on an idle server. Computing
-the company-wide compensation figures needs about 105 MB of PHP memory in total.
+The first-visit column is what the precomputing avoids: on the first start and then hourly the
+figures are computed ahead of the visitors. `php artisan departments:warm` takes 25 s for all
+departments, `php artisan reports:warm` about 4 minutes for all 19 scopes (the company, each
+department, each manager's department). Only a report for a month nobody asked for before
+is computed in the request. Department salary figures are read from the `(to_date, salary)`
+index instead of through each employee's salary history.
 
-Data tools, measured on the full dataset on a MySQL server shared with other work (so a quiet
-server is faster): XLSX of all 300k employees 2-4 minutes, ~170 MB, 20 MB file; PDF ~75 s per
-1,000 rows, 5,000 rows 5.5-8 minutes and ~1.3 GB (why it is queued and capped); XLSX of a
-manager's 77k employees up to ~9 minutes under load. REST API: list ~0.1-0.6 s, employee ~0.05 s,
-departments ~0.2 s; combined filters 4-14 s for the first request (counting), then ~0.3-1.4 s
-while the total is reused.
+After a change of the data, and at midnight for the current state, the next visitor gets the
+last good figures with a note, and a background process refreshes them. Computing the
+company-wide compensation figures needs about 105 MB of PHP memory in total.
+
+Data tools: XLSX of all 300k employees 2 minutes, ~190 MB, 21 MB file; XLSX of a manager's 77k
+employees 30 s, ~80 MB, 5 MB file (the same ~0.4 ms per row); PDF ~75 s per 1,000 rows, 5,000
+rows 5.5-8 minutes and ~1.3 GB (why it is queued and capped). REST API: list 0.4 s, employee
+0.1 s, departments 0.3 s; combined filters up to ~2 s for the first request (counting), then less
+while the total is reused for a minute.
 
 The role restrictions do not change this: a viewer's list (salary data stripped) renders like an
-administrator's (~0.1–0.2 s). A manager's list is the department filter on their department
-(~0.2–0.4 s for the largest one, d005 with ~77k current and former employees; its total is
-counted on `dept_emp` alone). The department dashboard of a manager takes ~2 s for the largest
-department on a cache miss and is cached for 15 minutes per department.
+administrator's. A manager's list is the department filter on their department (0.6-1 s for the
+largest one, d005 with ~77k current and former employees; its total is counted on `dept_emp`
+alone).
 
 ## Running Tests
 

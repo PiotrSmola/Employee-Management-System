@@ -119,8 +119,13 @@ class DashboardService
             'totalEmployees' => $stats['totalEmployees'],
             'totalDepartments' => 1,
             'averageSalary' => $visibility->canSeeSalaries() ? $stats['averageSalary'] : null,
+            // Newest first from the hire_date index, checking each employee: a semi-join
+            // would sort a large department on every visit (about a second for d005).
             'recentEmployees' => Employee::select('emp_no', 'first_name', 'last_name', 'hire_date')
-                ->whereIn('emp_no', $current()->select('de.emp_no'))
+                ->whereExists(fn ($query) => HistoryRows::active($query->selectRaw('/*+ NO_SEMIJOIN() */ 1')->from('dept_emp as de'), 'de')
+                    ->whereColumn('de.emp_no', 'employees.emp_no')
+                    ->where('de.dept_no', $department->dept_no)
+                    ->where('de.to_date', self::CURRENT))
                 ->orderBy('hire_date', 'desc')
                 ->limit(7)
                 ->get(),
