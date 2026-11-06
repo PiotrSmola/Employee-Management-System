@@ -28,8 +28,8 @@ Use the constants in `App\Support\Ability` (or the string names in Blade / route
 | `manage-departments` | ✓ | ✓ | – | – | creating / editing departments and department managers |
 | `manage-users` | ✓ | – | – | – | Users screen (`/users`) |
 | `view-audit-log` | ✓ | ✓ | – | – | audit log |
-| `export-data` | ✓ | ✓ | ✓ | – | bulk CSV / PDF export of the directory (`POST /employees/export`) |
-| `import-data` | ✓ | ✓ | – | – | data import |
+| `export-data` | ✓ | ✓ | ✓ | – | bulk CSV / XLSX / PDF export of the directory (`POST /employees/export`), My exports (`/exports`, own exports only) |
+| `import-data` | ✓ | ✓ | – | – | employee import (`/employees/import`) |
 | `view-reports` | ✓ | ✓ | ✓ | – | reports |
 
 ```php
@@ -63,7 +63,10 @@ server-side, not by hiding it in the view:
 - profile and profile PDF: no current salary, salary history, earnings, average or chart;
   the history table lists title periods instead (`EmployeeProfileService::build($employee, false)`
   does not query `salaries` at all);
-- bulk export: salary and earnings columns are left out (`EmployeeExportService::csv/pdf($query, false)`);
+- bulk export: salary and earnings columns are never offered in the column chooser and are
+  removed on the server (`EmployeeExportService::columns($withSalaries, ...)`); a queued export
+  re-checks the owner's abilities when the worker runs it;
+- REST API: the `salary` / `history.salaries` keys are missing, salary filters / sort are a 422;
 - dashboard: no average salary.
 
 New features that show salary data must check `EmployeeVisibility::canSeeSalaries()` (or the Gate).
@@ -133,3 +136,6 @@ department filter).
   configure trusted proxies (README, *Production settings*).
 - Initial accounts: see README, *Default accounts* (the seeder never re-creates deleted accounts).
 - A manager's filter options (departments, job titles) only list their own department's values.
+- API tokens (*My account → API tokens*, every role): a token acts as its owner - same role,
+  department scope and salary access, re-evaluated on every request - and is refused while the
+  account is inactive. Sanctum only accepts tokens (no session login for `/api`). See [API.md](API.md).

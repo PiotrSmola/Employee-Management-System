@@ -26,7 +26,9 @@ Route::middleware('can:'.Ability::VIEW_REPORTS)->prefix('reports')->name('report
   `tests/Feature/Http/RouteAndNavigationTest.php` fails for any `App\` route outside the group.
 - `/employees/{emp_no}` only matches numbers, so `/employees/create`, `/employees/import`, ...
   can live in another file. Use the same `->whereNumber(...)` for your own numeric parameters.
-- API routes (Sanctum) are not web routes: register `routes/api.php` in `bootstrap/app.php`.
+- API routes (Sanctum) are not web routes: they live in `routes/api.php` (registered in
+  `bootstrap/app.php`, prefix `/api/v1`, middleware `auth:sanctum` + `EnsureTokenUserIsActive` +
+  `throttle:api`; JSON errors via `AppHttpApiApiErrorRenderer`). See [API.md](API.md).
 
 ## Navbar items: `resources/views/layouts/nav/{main,user}/<NN>-<feature>.blade.php`
 
@@ -38,6 +40,7 @@ order. Add a file instead of editing `navbar.blade.php`. Existing slots:
 |------|------|
 | `main/10-dashboard` | Dashboard |
 | `main/20-employees` | All Employees, Export Data |
+| `main/50-data-tools` | Data tools: My exports, Import employees |
 | `main/90-users` | Users (admins) |
 | `user/10-account` | My account |
 | `user/90-users` | Users (admins) |
@@ -124,8 +127,11 @@ Signature: `AuditLogger::log(string $action, string $subjectType, string|int|nul
   `employee.promoted`, `employee.salary_changed`, `employee.terminated`, `department.created`,
   `department.manager_assigned`, `data.imported`, ... Existing ones: `user.created`,
   `user.updated`, `user.role_changed`, `user.password_reset`, `user.password_changed`,
-  `user.deleted`, `auth.login`, `auth.login_failed` (`changes`: `email`, `reason`).
-- `subjectType` is a short alias (`ActivityLog::SUBJECT_EMPLOYEE|DEPARTMENT|USER`; add a
+  `user.deleted`, `auth.login`, `auth.login_failed` (`changes`: `email`, `reason`),
+  `user.api_token_created`, `user.api_token_revoked`, `data.exported` (subject `export`, id of a
+  queued export or null), `data.imported` (subject `import`, `changes`: `count`, `file`,
+  `first_emp_no`, `last_emp_no`, `departments`).
+- `subjectType` is a short alias (`ActivityLog::SUBJECT_EMPLOYEE|DEPARTMENT|USER|EXPORT|IMPORT`; add a
   constant for a new one), `subjectId` the emp_no / dept_no / user id (stored as a string).
 - The acting user defaults to the signed-in user (pass it explicitly in queued jobs), the IP to
   the request's (null on the console). Keys such as `password`, `password_confirmation`,
