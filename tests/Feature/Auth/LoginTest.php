@@ -53,21 +53,37 @@ class LoginTest extends TestCase
     }
 
     /**
-     * Guards App\Support\SessionPasswordHash: Laravel's AuthenticateSession keeps the
-     * password hash under "password_hash_web" and only stores it when missing, so a
-     * stale value from another account used to sign the new user out right away.
-     * Fails if a framework upgrade renames that session key.
+     * The auth.session middleware keeps a fingerprint of the password under
+     * "password_hash_web" and only stores it when missing, so a value left by a
+     * previous account (deleted while signed in, without a logout) has to be replaced
+     * by SessionGuard::login(), or the new user is signed out right away.
+     * The next test proves that the very same stale value is really checked.
      */
     public function test_sign_in_works_in_a_session_left_over_from_another_account(): void
     {
-        User::factory()->create(['email' => 'jane@example.com']);
+        $user = User::factory()->create(['email' => 'jane@example.com']);
 
         $this->withSession(['password_hash_web' => 'hash-of-a-deleted-account'])
             ->post(route('login.store'), ['email' => 'jane@example.com', 'password' => 'password'])
             ->assertRedirect(route('index'));
 
+        $this->assertSame(
+            Auth::guard('web')->hashPasswordForCookie($user->getAuthPassword()),
+            session('password_hash_web'),
+        );
+
         $this->get(route('index'))->assertOk();
         $this->assertAuthenticated();
+    }
+
+    public function test_session_with_the_password_hash_of_another_account_is_signed_out(): void
+    {
+        $this->actingAs(User::factory()->create())
+            ->withSession(['password_hash_web' => 'hash-of-a-deleted-account'])
+            ->get(route('index'))
+            ->assertRedirect(route('login'));
+
+        $this->assertGuest();
     }
 
     public function test_sign_in_redirects_to_the_page_that_was_requested(): void

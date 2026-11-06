@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use App\Models\ActivityLog;
 use App\Services\AuditLogger;
-use App\Support\SessionPasswordHash;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -51,10 +50,10 @@ class AccountController extends Controller
         $user->update(['password' => $validated['password']]);
 
         // Other sessions are signed out by the auth.session middleware (password
-        // hash changed); keep this one, including a "remember me" cookie.
+        // hash changed); login() stores the new hash, which keeps this one signed
+        // in, including a "remember me" cookie.
         Auth::guard('web')->login($user, $request->hasCookie(Auth::guard('web')->getRecallerName()));
         $request->session()->regenerate();
-        SessionPasswordHash::store($request, $user, 'web');
 
         AuditLogger::log('user.password_changed', ActivityLog::SUBJECT_USER, $user->id, [], $user);
 

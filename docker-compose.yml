@@ -24,6 +24,7 @@ services:
       DB_USERNAME: ${DB_USERNAME:-laravel}
       DB_PASSWORD: ${DB_PASSWORD:-secret}
       SESSION_DRIVER: file
+      SESSION_SECURE_COOKIE: ${SESSION_SECURE_COOKIE:-false}
       CACHE_DRIVER: file
       QUEUE_CONNECTION: sync
       # Initial accounts (UserSeeder, fresh installs only). Empty ADMIN_PASSWORD: "password" when

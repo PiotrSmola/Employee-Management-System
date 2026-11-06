@@ -10,9 +10,7 @@ use Illuminate\Http\Request;
 
 class EmployeeController extends Controller
 {
-    public function __construct(private readonly EmployeeProfileService $profiles)
-    {
-    }
+    public function __construct(private readonly EmployeeProfileService $profiles) {}
 
     public function index()
     {
@@ -35,8 +33,7 @@ class EmployeeController extends Controller
         $employee = $profile['employee'];
 
         $pdf = Pdf::loadView('exports.show-pdf', $profile)
-            ->setPaper('A4', 'portrait')
-            ->setOptions(['isHtml5ParserEnabled' => true, 'isPhpEnabled' => true, 'defaultFont' => 'DejaVu Sans']);
+            ->setPaper('A4', 'portrait');
 
         return $pdf->download('employee_details_'.$employee->emp_no.'_'.$employee->first_name.'_'.$employee->last_name.'.pdf');
     }
