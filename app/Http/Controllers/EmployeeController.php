@@ -10,9 +10,7 @@ use Illuminate\Http\Request;
 
 class EmployeeController extends Controller
 {
-    public function __construct(private readonly EmployeeProfileService $profiles)
-    {
-    }
+    public function __construct(private readonly EmployeeProfileService $profiles) {}
 
     public function index()
     {
