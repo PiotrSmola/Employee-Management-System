@@ -195,7 +195,8 @@ remembered in the browser). Salary columns are only offered - and only ever writ
   `php artisan exports:prune [--days=N]` (at least 1), which the scheduler runs daily at 03:00.
   It also marks exports as failed that ran past the job's timeout or waited for more than
   24 hours (`EXPORTS_PENDING_TIMEOUT_HOURS`); unfinished exports are never deleted.
-- XLSX files are written row by row with openspout (constant memory); numbers and dates are
+- XLSX files are written row by row with openspout (~170 MB peak for all 300k employees, most of
+  it the list of employee numbers); numbers and dates are
   typed cells, text is never turned into a formula. CSV cells starting with `= + - @` are
   prefixed with `'`.
 - Every export is audited (`data.exported`: format, rows, columns, filters, queued or not), and
@@ -365,6 +366,13 @@ The directory has to stay fast on ~300k employees / ~2.8M salary rows:
 Typical timings on the full dataset (Docker, warm-ish cache): unfiltered list ~0.1 s,
 single filters and sorts 0.1–0.6 s, combined filters up to ~2 s, full CSV export of all
 300k employees ~50 s (streamed).
+
+Data tools, measured on the full dataset on a MySQL server shared with other work (so a quiet
+server is faster): XLSX of all 300k employees 2-4 minutes, ~170 MB, 20 MB file; PDF ~75 s per
+1,000 rows, 5,000 rows 5.5-8 minutes and ~1.3 GB (why it is queued and capped); XLSX of a
+manager's 77k employees up to ~9 minutes under load. REST API: list ~0.1-0.6 s, employee ~0.05 s,
+departments ~0.2 s; combined filters 4-14 s for the first request (counting), then ~0.3-1.4 s
+while the total is reused.
 
 The role restrictions do not change this: a viewer's list (salary data stripped) renders like an
 administrator's (~0.1–0.2 s). A manager's list is the department filter on their department
