@@ -309,6 +309,13 @@ Typical timings on the full dataset (Docker, warm-ish cache): unfiltered list ~0
 single filters and sorts 0.1–0.6 s, combined filters up to ~2 s, full CSV export of all
 300k employees ~50 s (streamed).
 
+Reports are served from the cache (about 0.1 s per page). A page whose figures are not cached
+yet computes them in the request: on the full dataset about 10 s for the company-wide workforce
+page and 20 s for the compensation page, 20-60 s for a department or a manager's scope and for
+other as-of dates, more while the database is busy (the default 128 MB InnoDB buffer pool is smaller
+than the dataset, so a larger pool helps most). `php artisan reports:warm` computes the current
+state of all scopes ahead of the visitors.
+
 The role restrictions do not change this: a viewer's list (salary data stripped) renders like an
 administrator's (~0.1–0.2 s). A manager's list is the department filter on their department
 (~0.2–0.4 s for the largest one, d005 with ~77k current and former employees; its total is
