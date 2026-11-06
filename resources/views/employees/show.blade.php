@@ -16,6 +16,8 @@
             </ol>
         </nav>
 
+        @include('layouts.flash')
+
         <div class="row mb-4">
             <div class="col-12">
                 <div class="card gradient-card-1 text-white">
@@ -80,6 +82,10 @@
                 </div>
             </div>
         </div>
+
+        @can('manage-employees')
+            <x-employee-actions :employee="$employee" />
+        @endcan
 
         <div class="row g-3 mb-4 justify-content-center">
             @if ($canSeeSalaries)

@@ -1,14 +1,20 @@
 <div wire:id="{{ $this->getId() }}" class="employee-list-wrapper">
-    <div class="d-flex justify-content-between align-items-center mb-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
         <h1 class="h3 mb-0">
             <i class="bi bi-people me-2 text-primary"></i>
             Employee Directory
         </h1>
-        <div class="d-flex align-items-center gap-3">
+        <div class="d-flex flex-wrap align-items-center gap-3">
             <div class="text-muted">
                 <i class="bi bi-info-circle me-1"></i>
                 {{ $employees->total() }} employee(s) found
             </div>
+            @can('manage-employees')
+                <a href="{{ route('employees.create') }}" class="btn btn-primary">
+                    <i class="bi bi-person-plus me-1"></i>
+                    {{ __('Add employee') }}
+                </a>
+            @endcan
             @if ($canExport)
                 <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#exportModal"
                     data-selected-count="{{ $selectedCount }}" data-total-count="{{ $employees->total() }}"
