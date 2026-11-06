@@ -126,8 +126,9 @@ Signature: `AuditLogger::log(string $action, string $subjectType, string|int|nul
   `department.manager_assigned`, `data.imported`, ... HR operations write `employee.hired`,
   `employee.updated`, `employee.transferred`, `employee.promoted`, `employee.demoted`,
   `employee.title_changed`, `employee.salary_changed`, `employee.terminated`,
-  `employee.rehired`, `employee.salary_corrected`, `employee.title_corrected` (payloads in
-  [HR_OPERATIONS.md](HR_OPERATIONS.md)). Existing ones: `user.created`,
+  `employee.rehired`, `employee.salary_corrected`, `employee.title_corrected`,
+  `employee.change_undone` (payloads in [HR_OPERATIONS.md](HR_OPERATIONS.md); their `_undo`
+  key is internal data of the undo, keys starting with `_` are never displayed). Existing ones: `user.created`,
   `user.updated`, `user.role_changed`, `user.password_reset`, `user.password_changed`,
   `user.deleted`, `auth.login`, `auth.login_failed` (`changes`: `email`, `reason`).
 - `subjectType` is a short alias (`ActivityLog::SUBJECT_EMPLOYEE|DEPARTMENT|USER`; add a
@@ -141,7 +142,9 @@ Signature: `AuditLogger::log(string $action, string $subjectType, string|int|nul
   order, so compare `changes` with `assertEquals` in tests.
 - Reading: `ActivityLog::forSubject('employee', 10001)->latestFirst()->paginate()`, relation
   `user` (null when the account was deleted). Indexes: `created_at`,
-  `(subject_type, subject_id, created_at)`, `(action, created_at)`. Entries are never updated.
+  `(subject_type, subject_id, created_at)`, `(action, created_at)`, `(action_group, created_at)`
+  (`action_group` = the part before the dot, a generated column), `(user_id, created_at)`.
+  Entries are never updated.
 - The audit log screen (`/audit-log`, route `audit-log.index`) is behind `Ability::VIEW_AUDIT_LOG`.
   It renders any `changes` payload (`App\Support\AuditLogPresenter`): `before`/`after` pairs
   as *before → after*, other keys as values, `dept_no` with the department name. Departments link to
@@ -150,7 +153,10 @@ Signature: `AuditLogger::log(string $action, string $subjectType, string|int|nul
 ## Changing employees: `App\Services\EmployeeOperationsService`
 
 Hire, transfer, title / salary changes, termination and rehire go through this service (it
-keeps the history shape, locks the employee, audits and flushes the cache). Code that inserts
+keeps the history shape, locks the employee, audits and flushes the cache). `dept_emp` and
+`dept_manager` have the primary key `(emp_no, dept_no, from_date)`: an employee can have several
+periods in one department - pick the current one by `to_date = 9999-01-01` and the last one by
+the latest `to_date`, never by `(emp_no, dept_no)` alone. Code that inserts
 employees itself (e.g. an import) takes the number from `EmployeeNumberAllocator::next()`
 inside its transaction. See [HR_OPERATIONS.md](HR_OPERATIONS.md).
 

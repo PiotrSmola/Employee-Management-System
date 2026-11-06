@@ -167,9 +167,11 @@ directory) and, from the **HR actions** card of a profile, edit personal data, t
 employees, change titles (promotion / demotion) and salaries (amount or %), terminate and
 rehire employees, and correct a typo in the latest salary or title. History is never deleted:
 a change closes the current record and starts a new one on the effective date (today or
-earlier, after the start of the current record). A return to a department the employee already
-belonged to is not possible - `dept_emp` keeps one period per employee and department.
-Transferring or terminating a department manager ends the management.
+earlier, after the start of the current record); a return to a department the employee belonged
+to before adds a new period. Transferring or terminating a department manager ends the
+management. Unusual salary changes (beyond -50 % / +100 %) and possible duplicate hires need an
+explicit confirmation, and the most recent change of an employee can be undone within 24 hours
+while nothing else changed.
 
 Every change is recorded in the audit log. Administrators and HR (`view-audit-log`) see it under
 **Audit log** in the user menu (filters: action, subject, user, date range) and as **Change
@@ -351,7 +353,7 @@ The application provides the following main routes:
 - `GET /employees/{emp_no}/export-pdf` - Individual PDF export
 - `GET /account`, `PUT /account/profile`, `PUT /account/password` - My account
 - `GET /employees/create`, `POST /employees` - Hire an employee (`manage-employees`)
-- `PUT /employees/{emp_no}`, `POST /employees/{emp_no}/transfer|title|salary|terminate|rehire`,
+- `PUT /employees/{emp_no}`, `POST /employees/{emp_no}/transfer|title|salary|terminate|rehire|undo`,
   `PUT /employees/{emp_no}/salary/latest|title/latest` - HR operations (`manage-employees`, see docs/HR_OPERATIONS.md)
 - `GET /audit-log` - Audit log (`view-audit-log`)
 - `/users` (resource without `show`), `PUT /users/{user}/password` - User management (`manage-users`)
