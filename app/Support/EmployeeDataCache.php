@@ -21,6 +21,9 @@ final class EmployeeDataCache
     /** Company-wide employees per department (DashboardService). */
     public const EMPLOYEES_BY_DEPARTMENT = 'employees_by_department';
 
+    /** Figures of every department on the departments index (DepartmentStatistics). */
+    public const DEPARTMENTS_OVERVIEW = 'departments_overview';
+
     /** Dashboard totals of a manager's department. */
     public static function departmentStats(string $deptNo): string
     {
@@ -39,6 +42,12 @@ final class EmployeeDataCache
         return 'job_titles:dept:'.$deptNo;
     }
 
+    /** Statistics of one department page (DepartmentStatistics). */
+    public static function departmentDetails(string $deptNo): string
+    {
+        return 'department_details:dept:'.$deptNo;
+    }
+
     /**
      * Every key, for all departments (or only $departments) - company-wide keys always.
      *
@@ -49,12 +58,13 @@ final class EmployeeDataCache
     {
         $departments ??= [...Department::query()->pluck('dept_no')->all(), EmployeeVisibility::NO_DEPARTMENT];
 
-        $keys = [self::DASHBOARD_STATS, self::EMPLOYEES_BY_DEPARTMENT];
+        $keys = [self::DASHBOARD_STATS, self::EMPLOYEES_BY_DEPARTMENT, self::DEPARTMENTS_OVERVIEW];
 
         foreach ($departments as $deptNo) {
             $keys[] = self::departmentStats($deptNo);
             $keys[] = self::departmentTitleBreakdown($deptNo);
             $keys[] = self::departmentJobTitles($deptNo);
+            $keys[] = self::departmentDetails($deptNo);
         }
 
         return $keys;
