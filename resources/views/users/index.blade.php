@@ -68,7 +68,6 @@
                         </thead>
                         <tbody>
                             @forelse ($users as $user)
-                                @php($blocked = $deletionBlocked[$user->id] ?? null)
                                 <tr>
                                     <td class="fw-semibold">
                                         {{ $user->name }}
@@ -104,9 +103,9 @@
                                             onsubmit="return confirm(@js(__('Delete the account of :name?', ['name' => $user->name])))">
                                             @csrf
                                             @method('DELETE')
-                                            <span class="d-inline-block" @if ($blocked) tabindex="0" title="{{ $blocked }}" @endif>
+                                            <span class="d-inline-block" @if ($deletionBlocked[$user->id]) tabindex="0" title="{{ $deletionBlocked[$user->id] }}" @endif>
                                                 <button type="submit" class="btn btn-sm btn-outline-danger"
-                                                    title="{{ __('Delete') }}" @disabled($blocked)>
+                                                    title="{{ __('Delete') }}" @disabled($deletionBlocked[$user->id])>
                                                     <i class="bi bi-trash"></i>
                                                 </button>
                                             </span>

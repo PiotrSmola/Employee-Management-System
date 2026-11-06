@@ -1,8 +1,3 @@
-@php
-    $editing = $user->exists;
-    $self = $editing && $user->is(auth()->user());
-    $selectedRole = old('role', $user->role?->value);
-@endphp
 @include('layouts.html')
 @include('layouts.head', ['pageTitle' => ($editing ? __('Edit user') : __('New user')) . ' - Employee Management System'])
 
@@ -64,7 +59,7 @@
                                     @endif
                                     <select id="role" @unless ($self) name="role" @endunless
                                         class="form-select @error('role') is-invalid @enderror" @disabled($self) required>
-                                        @foreach (\App\Enums\Role::cases() as $option)
+                                        @foreach ($roles as $option)
                                             <option value="{{ $option->value }}" @selected($selectedRole === $option->value)>
                                                 {{ $option->label() }}
                                             </option>
@@ -185,7 +180,7 @@
                         <h5 class="mb-0 text-body-emphasis"><i class="bi bi-shield-check me-2"></i>{{ __('Roles') }}</h5>
                     </div>
                     <ul class="list-group list-group-flush">
-                        @foreach (\App\Enums\Role::cases() as $option)
+                        @foreach ($roles as $option)
                             <li class="list-group-item">
                                 <span class="badge role-badge {{ $option->badgeClass() }} me-2">{{ $option->label() }}</span>
                                 <span class="small">{{ $option->description() }}</span>
@@ -199,15 +194,7 @@
 
     @include('layouts.footer', ['fixedBottom' => false])
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const role = document.getElementById('role');
-            const departmentField = document.getElementById('departmentField');
-            const toggle = () => departmentField.classList.toggle('d-none', role.value !== 'manager');
-            role.addEventListener('change', toggle);
-            toggle();
-        });
-    </script>
+    <script src="{{ asset('js/user-form.js') }}"></script>
 </body>
 
 </html>

@@ -138,7 +138,7 @@
                                     </div>
                                     <small class="text-muted">
                                         <i class="bi bi-calendar3 me-1"></i>
-                                        Hired: {{ \Carbon\Carbon::parse($employee->hire_date)->format('M d, Y') }}
+                                        Hired: @date($employee->hire_date, 'M d, Y')
                                         <span
                                             class="ms-2 text-white rounded px-1 {{ $employee->gender === 'M' ? 'bg-primary' : 'bg-pink' }}">
                                             {{ $employee->gender === 'M' ? 'Male' : 'Female' }}

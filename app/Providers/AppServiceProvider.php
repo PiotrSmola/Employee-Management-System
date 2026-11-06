@@ -2,7 +2,10 @@
 
 namespace App\Providers;
 
+use App\Support\Navigation;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
 use Livewire\Livewire;
@@ -22,6 +25,13 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        Blade::directive('date', fn (string $arguments) => "<?php echo e(\\App\\Support\\DisplayDate::format({$arguments})); ?>");
+
+        View::composer('layouts.navbar', fn ($view) => $view->with([
+            'mainNavItems' => Navigation::partials(Navigation::MAIN),
+            'userNavItems' => Navigation::partials(Navigation::USER),
+        ]));
+
         // No uncompromised() check: the application may run without internet access.
         Password::defaults(fn () => Password::min(10)->letters()->numbers());
 

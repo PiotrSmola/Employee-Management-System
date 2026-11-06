@@ -6,7 +6,7 @@
 </li>
 @can('export-data')
     <li class="nav-item">
-        @if (Route::currentRouteName() === 'employees.index')
+        @if (request()->routeIs('employees.index'))
             <a class="nav-link orange-after" href="#" data-bs-toggle="modal"
                 data-bs-target="#exportModal">
                 <i class="bi bi-download me-1"></i>

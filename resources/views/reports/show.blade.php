@@ -42,6 +42,8 @@
             @endcan
         </ul>
 
+        <x-figures-status :status="$figuresStatus" />
+
         @include('reports.partials.filters')
 
         @if ($context->isBeforeHistory())

@@ -69,7 +69,7 @@
             </div>
         </div>
 
-        @include('departments.partials.figures-status')
+        <x-figures-status :status="$figuresStatus" />
 
         @if ($figuresReady)
         {{-- Key figures --}}
@@ -259,7 +259,7 @@
     @include('layouts.footer', ['fixedBottom' => false])
 
     @if ($headcountByYear->isNotEmpty())
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        @include('layouts.chartjs')
         <script src="{{ asset('js/department-headcount-chart.js') }}"></script>
     @endif
 </body>

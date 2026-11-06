@@ -8,7 +8,7 @@
         <div class="collapse navbar-collapse" id="navbarScroll">
             <ul class="navbar-nav me-auto my-2 my-lg-0">
                 {{-- Items: resources/views/layouts/nav/main/*.blade.php in file name order (docs/EXTENDING.md) --}}
-                @foreach (App\Support\Navigation::partials(App\Support\Navigation::MAIN) as $navItem)
+                @foreach ($mainNavItems as $navItem)
                     @include($navItem)
                 @endforeach
             </ul>
@@ -41,7 +41,7 @@
                             </li>
                             <li><hr class="dropdown-divider"></li>
                             {{-- Items: resources/views/layouts/nav/user/*.blade.php in file name order --}}
-                            @foreach (App\Support\Navigation::partials(App\Support\Navigation::USER) as $navItem)
+                            @foreach ($userNavItems as $navItem)
                                 @include($navItem)
                             @endforeach
                             <li><hr class="dropdown-divider"></li>

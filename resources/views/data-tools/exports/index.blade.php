@@ -113,9 +113,7 @@
     @include('layouts.footer', ['fixedBottom' => false])
 
     @if ($hasUnfinished)
-        <script>
-            setTimeout(() => window.location.reload(), 5000);
-        </script>
+        <script src="{{ asset('js/auto-reload.js') }}" data-delay="5000"></script>
     @endif
 </body>
 

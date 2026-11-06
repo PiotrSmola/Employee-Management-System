@@ -34,7 +34,7 @@
         </div>
 
         @include('layouts.flash')
-        @include('departments.partials.figures-status')
+        <x-figures-status :status="$figuresStatus" />
 
         <div class="row g-4">
             @forelse ($departments as $department)

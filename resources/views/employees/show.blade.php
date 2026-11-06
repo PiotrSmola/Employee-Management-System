@@ -38,7 +38,7 @@
                                         <p class="mb-1 opacity-90">
                                             <i class="bi bi-calendar3 me-1"></i>
                                             Hired:
-                                            {{ \Carbon\Carbon::parse($employee->hire_date)->format('d.m.Y') }}
+                                            @date($employee->hire_date)
                                             @if (!$stats['isCurrentEmployee'] && $stats['employmentEndDate'])
                                                 - {{ $stats['employmentEndDate']->format('d.m.Y') }}
                                             @elseif($stats['isCurrentEmployee'])
@@ -54,10 +54,10 @@
                                 </div>
                             </div>
                             <div class="col-md-4 text-md-end">
-                                @if ($employee->currentDepartment->count() > 0)
+                                @if ($stats['isCurrentEmployee'])
                                     <h4 class="mb-2">
                                         <span class="badge bg-white text-primary">
-                                            {{ $employee->currentDepartment->first()->dept_name }}
+                                            {{ $stats['currentDepartmentName'] }}
                                         </span>
                                     </h4>
                                 @else
@@ -148,7 +148,7 @@
             </div>
         </div>
 
-        @if ($salaryChartData->count() > 0)
+        @if ($salaryChartData->isNotEmpty())
             <div class="row mb-4">
                 <div class="col-12">
                     <div class="card">
@@ -159,7 +159,9 @@
                             </h5>
                         </div>
                         <div class="card-body">
-                            <canvas id="salaryChart" height="100"></canvas>
+                            <canvas id="salaryChart" height="100" data-points="{{ $salaryChartData->toJson() }}"
+                                data-dataset-label="{{ __('Average salary (USD)') }}" data-tooltip-label="{{ __('Average salary') }}"
+                                data-year-label="{{ __('Year') }}"></canvas>
                         </div>
                     </div>
                 </div>
@@ -200,12 +202,12 @@
                                         <tr class="{{ $history->is_current ? 'table-info' : '' }}">
                                             <td>
                                                 <div class="fw-semibold">
-                                                    {{ \Carbon\Carbon::parse($history->from_date)->format('d.m.Y') }}
+                                                    @date($history->from_date)
                                                 </div>
                                                 <small class="text-muted">
                                                     @if ($history->to_date !== '9999-01-01')
                                                         to
-                                                        {{ \Carbon\Carbon::parse($history->to_date)->format('d.m.Y') }}
+                                                        @date($history->to_date)
                                                     @else
                                                         to Present
                                                     @endif
@@ -275,71 +277,9 @@
 
     @include('layouts.footer', ['fixedBottom' => false])
 
-    @if ($salaryChartData->count() > 0)
+    @if ($salaryChartData->isNotEmpty())
         @include('layouts.chartjs')
-        <script>
-            document.addEventListener('DOMContentLoaded', function() {
-                const ctx = document.getElementById('salaryChart').getContext('2d');
-                const salaryData = @json($salaryChartData);
-
-                new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels: salaryData.map(item => item.year.toString()),
-                        datasets: [{
-                            label: @json(__('Average salary (USD)')),
-                            data: salaryData.map(item => item.salary),
-                            borderColor: '#3b82f6',
-                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                            borderWidth: 3,
-                            fill: true,
-                            tension: 0.4,
-                            pointBackgroundColor: '#3b82f6',
-                            pointBorderColor: '#ffffff',
-                            pointBorderWidth: 2,
-                            pointRadius: 6
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: {
-                                display: false
-                            },
-                            tooltip: {
-                                callbacks: {
-                                    label: function(context) {
-                                        return @json(__('Average salary')) + ': $' + context.parsed.y.toLocaleString();
-                                    }
-                                }
-                            }
-                        },
-                        scales: {
-                            y: {
-                                beginAtZero: false,
-                                ticks: {
-                                    callback: function(value) {
-                                        return '$' + value.toLocaleString();
-                                    }
-                                }
-                            },
-                            x: {
-                                title: {
-                                    display: true,
-                                    text: @json(__('Year'))
-                                }
-                            }
-                        },
-                        elements: {
-                            point: {
-                                hoverRadius: 8
-                            }
-                        }
-                    }
-                });
-            });
-        </script>
+        <script src="{{ asset('js/employee-salary-chart.js') }}"></script>
     @endif
 
 </body>

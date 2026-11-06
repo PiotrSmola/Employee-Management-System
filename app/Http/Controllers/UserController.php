@@ -52,12 +52,9 @@ class UserController extends Controller
         ]);
     }
 
-    public function create(): View
+    public function create(Request $request): View
     {
-        return view('users.form', [
-            'user' => new User(['role' => Role::Viewer, 'is_active' => true]),
-            'departments' => $this->departments(),
-        ]);
+        return $this->form($request, new User(['role' => Role::Viewer, 'is_active' => true]));
     }
 
     public function store(UserRequest $request): RedirectResponse
@@ -68,12 +65,9 @@ class UserController extends Controller
             ->with('status', __('User :name has been created.', ['name' => $user->name]));
     }
 
-    public function edit(User $user): View
+    public function edit(Request $request, User $user): View
     {
-        return view('users.form', [
-            'user' => $user,
-            'departments' => $this->departments(),
-        ]);
+        return $this->form($request, $user);
     }
 
     public function update(UserRequest $request, User $user): RedirectResponse
@@ -109,6 +103,18 @@ class UserController extends Controller
 
         return redirect()->route('users.index')
             ->with('status', __('User :name has been deleted.', ['name' => $user->name]));
+    }
+
+    private function form(Request $request, User $user): View
+    {
+        return view('users.form', [
+            'user' => $user,
+            'departments' => $this->departments(),
+            'roles' => Role::cases(),
+            'editing' => $user->exists,
+            'self' => $user->exists && $user->is($request->user()),
+            'selectedRole' => old('role', $user->role?->value),
+        ]);
     }
 
     private function departments()

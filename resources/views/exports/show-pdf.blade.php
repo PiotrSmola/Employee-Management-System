@@ -408,7 +408,7 @@
                     <span class="icon-text">Employee ID: {{ $employee->emp_no }}</span>
                 </p>
                 <p class="opacity-90 mb-1">
-                    <span class="icon-text">Hired: {{ \Carbon\Carbon::parse($employee->hire_date)->format('d.m.Y') }}
+                    <span class="icon-text">Hired: @date($employee->hire_date)
                         @if (!$stats['isCurrentEmployee'] && $stats['employmentEndDate'])
                             - {{ $stats['employmentEndDate']->format('d.m.Y') }}
                         @elseif($stats['isCurrentEmployee'])
@@ -421,9 +421,9 @@
                 </p>
             </div>
             <div class="header-right">
-                @if ($employee->currentDepartment->count() > 0)
+                @if ($stats['isCurrentEmployee'])
                     <h4 class="mb-2">
-                        <span class="badge bg-white">{{ $employee->currentDepartment->first()->dept_name }}</span>
+                        <span class="badge bg-white">{{ $stats['currentDepartmentName'] }}</span>
                     </h4>
                 @else
                     <h4 class="mb-2">
@@ -507,11 +507,11 @@
                         <tr class="{{ $history->is_current ? 'current-row' : '' }}">
                             <td class="period-col">
                                 <div class="fw-semibold">
-                                    {{ \Carbon\Carbon::parse($history->from_date)->format('d.m.Y') }}
+                                    @date($history->from_date)
                                 </div>
                                 <div class="text-muted" style="font-size: 6px;">
                                     @if ($history->to_date !== '9999-01-01')
-                                        to {{ \Carbon\Carbon::parse($history->to_date)->format('d.m.Y') }}
+                                        to @date($history->to_date)
                                     @else
                                         to Present
                                     @endif
@@ -558,7 +558,7 @@
 
         <!-- Footer -->
         <div style="margin-top: 15px; text-align: center; font-size: 7px; color: #666;">
-            <p>Generated on {{ now()->format('d.m.Y H:i:s') }} | Employee Management System</p>
+            <p>Generated on @date($generatedAt, 'd.m.Y H:i:s') | Employee Management System</p>
         </div>
     </div>
 </body>

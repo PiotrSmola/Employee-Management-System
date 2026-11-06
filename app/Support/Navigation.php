@@ -8,7 +8,8 @@ namespace App\Support;
  *   resources/views/layouts/nav/main/<NN>-<feature>.blade.php   links in the bar
  *   resources/views/layouts/nav/user/<NN>-<feature>.blade.php   entries of the user dropdown
  *
- * The navbar includes every partial of a section in file name order, so a
+ * The navbar (view composer in AppServiceProvider) includes every partial of a
+ * section in file name order, so a
  * feature adds its own file (with its own @can check) instead of editing the
  * navbar. See docs/EXTENDING.md.
  */

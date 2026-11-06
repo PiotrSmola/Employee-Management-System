@@ -106,7 +106,7 @@
                                     </div>
                                     <small class="text-muted">
                                         <i class="bi bi-calendar3 me-1"></i>
-                                        Hired: {{ \Carbon\Carbon::parse($employee->hire_date)->format('M d, Y') }}
+                                        Hired: @date($employee->hire_date, 'M d, Y')
                                     </small>
                                 </div>
                                 <span class="badge bg-success">{{ $employee->emp_no }}</span>

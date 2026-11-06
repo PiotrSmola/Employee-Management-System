@@ -16,7 +16,7 @@
         @include('components.export-modal')
     @endcan
 
-    @include('employees.partials.url-history')
+    <script src="{{ asset('js/url-history.js') }}"></script>
 
     @livewireScripts
 </body>

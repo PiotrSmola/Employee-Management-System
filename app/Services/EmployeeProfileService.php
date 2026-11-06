@@ -168,6 +168,7 @@ class EmployeeProfileService
             'titleChanges' => $titleHistory->count(),
             'salaryChanges' => $salaryHistory->count(),
             'isCurrentEmployee' => $isCurrentEmployee,
+            'currentDepartmentName' => $employee->currentDepartment->first()?->dept_name,
             'employmentEndDate' => $employmentEndDate,
         ];
     }

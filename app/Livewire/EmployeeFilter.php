@@ -61,13 +61,14 @@ class EmployeeFilter extends Component
 
         // A shared link / reloaded page: start with the filters of the URL (the list reads
         // the same parameters) and show the filter panel when more than the search is set.
-        $fromUrl = array_intersect_key(request()->query(), self::URL_PARAMETERS);
+        // The department was read above: only an existing one counts.
+        $fromUrl = array_diff_key(array_intersect_key(request()->query(), self::URL_PARAMETERS), ['department' => true]);
         if ($fromUrl !== []) {
             $this->fill($this->normalized(array_combine(
                 array_map(fn ($key) => self::URL_PARAMETERS[$key], array_keys($fromUrl)),
                 $fromUrl
             ) + $this->getFilters()));
-            $this->showFilters = array_diff_key($fromUrl, ['search' => true]) !== [];
+            $this->showFilters = $this->showFilters || array_diff_key($fromUrl, ['search' => true]) !== [];
         }
 
         // A manager's list is always limited to their department (enforced by
