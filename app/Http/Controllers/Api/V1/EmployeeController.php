@@ -5,9 +5,11 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
 use App\Queries\EmployeeFilters;
+use App\Queries\EmployeeSearchQuery;
 use App\Support\EmployeeVisibility;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -23,6 +25,9 @@ use Illuminate\Validation\ValidationException;
 class EmployeeController extends Controller
 {
     private const CURRENT = '9999-01-01';
+
+    /** Seconds a counted total is reused. */
+    private const TOTAL_TTL = 60;
 
     /** Query parameter => EmployeeFilters::fromArray() name (the web directory's URL names). */
     private const FILTERS = [
@@ -80,7 +85,7 @@ class EmployeeController extends Controller
         $perPage = (int) ($validated['per_page'] ?? config('data_tools.api.default_per_page', 20));
         $page = (int) ($validated['page'] ?? 1);
         $query = $visibility->query($filters);
-        $paginator = $query->paginate($perPage, $page);
+        $paginator = $query->paginate($perPage, $page, $this->total($query));
         $withSalaries = $visibility->canSeeSalaries();
 
         $data = $paginator->getCollection()->map(fn ($row) => $this->listItem($row, $withSalaries))->values();
@@ -159,6 +164,22 @@ class EmployeeController extends Controller
         }
 
         return response()->json(['data' => $data]);
+    }
+
+    /**
+     * Number of matches, kept for a minute: counting is the expensive part of a request with
+     * combined filters, and a client paging through a result would repeat it for every page
+     * (the web directory keeps its total the same way). The key holds the applied filters,
+     * so a manager's department is part of it.
+     */
+    private function total(EmployeeSearchQuery $query): int
+    {
+        $f = $query->filters();
+        $key = 'api-employees-total:'.md5(serialize([
+            $f->search, $f->employmentStatus, $f->gender, $f->department, $f->jobTitle, $f->salaryMin, $f->salaryMax,
+        ]));
+
+        return Cache::remember($key, self::TOTAL_TTL, fn () => $query->count());
     }
 
     /**

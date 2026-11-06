@@ -95,6 +95,8 @@ curl -H "Authorization: Bearer $EMS_TOKEN" "http://localhost:8000/api/v1/employe
 - Former employees have `"status": "former"` and their **last** department / title.
 - `salary` (current salary) is present only with `view-salaries`, otherwise the key is missing
   everywhere. Every role with API access has it today; the rule applies should that change.
+- `meta.total` is reused for 60 seconds per set of filters, so that paging through a result
+  does not count it again; it can lag behind new employees for that long.
 - `meta.filters` shows the filters actually applied - for a manager `department` is always
   their own department, whatever was requested.
 

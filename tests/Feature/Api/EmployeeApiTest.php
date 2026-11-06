@@ -338,6 +338,20 @@ class EmployeeApiTest extends TestCase
         $this->api('/api/v1/departments', $valid)->assertOk();
     }
 
+    public function test_totals_are_reused_and_kept_per_filter_and_scope(): void
+    {
+        $admin = $this->token(User::factory()->admin()->create());
+        $manager = $this->token(User::factory()->manager($this->alpha)->create());
+
+        $this->api('/api/v1/employees', $admin, ['gender' => 'F'])->assertJsonPath('meta.total', 3);
+
+        Employee::factory()->create(['emp_no' => 80, 'gender' => 'F']);
+
+        $this->api('/api/v1/employees', $admin, ['gender' => 'F', 'page' => 2])->assertJsonPath('meta.total', 3);
+        $this->api('/api/v1/employees', $admin, ['gender' => 'M'])->assertJsonPath('meta.total', 4);
+        $this->api('/api/v1/employees', $manager, ['gender' => 'F'])->assertJsonPath('meta.total', 2);
+    }
+
     // ---------------------------------------------------------- large ids
 
     public function test_new_employees_appear_in_the_api(): void
