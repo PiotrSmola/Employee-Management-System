@@ -51,19 +51,19 @@ abstract class HrOperationsTestCase extends TestCase
     }
 
     /**
-     * Rows of $table for the employee, oldest first, as arrays.
+     * Active rows of $table for the employee, oldest first, as arrays.
      *
      * @return array<int, array<string, mixed>>
      */
     protected function rows(string $table, int $empNo, array $columns = ['*']): array
     {
-        return DB::table($table)->where('emp_no', $empNo)->orderBy('from_date')->get($columns)
+        return DB::table($table)->where('emp_no', $empNo)->where('void_log_id', 0)->orderBy('from_date')->get($columns)
             ->map(fn ($row) => (array) $row)->all();
     }
 
     protected function current(string $table, int $empNo): ?object
     {
-        return DB::table($table)->where('emp_no', $empNo)->where('to_date', self::CURRENT)->first();
+        return DB::table($table)->where('emp_no', $empNo)->where('void_log_id', 0)->where('to_date', self::CURRENT)->first();
     }
 
     /**

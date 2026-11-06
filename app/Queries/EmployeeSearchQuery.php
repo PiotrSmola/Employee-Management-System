@@ -2,6 +2,7 @@
 
 namespace App\Queries;
 
+use App\Support\HistoryRows;
 use Closure;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -28,7 +29,8 @@ use Illuminate\Support\Facades\DB;
  * each ordered by emp_no.
  *
  * Semantics (identical to the original single-query implementation):
- *  - "current" rows have to_date = 9999-01-01;
+ *  - "current" rows have to_date = 9999-01-01; voided rows (undone HR operations,
+ *    {@see HistoryRows}) do not exist for any query here;
  *  - employees without a current department row are former employees;
  *  - former employees are shown, filtered and sorted by their *last*
  *    department / title: the row with the latest to_date (ties: lowest
@@ -111,7 +113,7 @@ class EmployeeSearchQuery
         if ($onlyStatus) {
             // Index-only count instead of a (anti-)join over all employees;
             // dept_emp.emp_no always references an existing employee (foreign key).
-            $current = DB::table('dept_emp')->where('to_date', self::CURRENT)->distinct()->count('emp_no');
+            $current = HistoryRows::active(DB::table('dept_emp'))->where('to_date', self::CURRENT)->distinct()->count('emp_no');
 
             return $f->employmentStatus === 'current' ? $current : DB::table('employees')->count() - $current;
         }
@@ -137,7 +139,7 @@ class EmployeeSearchQuery
      */
     private function departmentCount(string $deptNo, string $status): int
     {
-        $current = $status === 'former' ? 0 : DB::table('dept_emp')
+        $current = $status === 'former' ? 0 : HistoryRows::active(DB::table('dept_emp'))
             ->where('dept_no', $deptNo)
             ->where('to_date', self::CURRENT)
             ->count();
@@ -193,14 +195,14 @@ class EmployeeSearchQuery
         match ($f->sortBy) {
             'name' => $query->orderBy('e.first_name', $dir)->orderBy('e.last_name', $dir),
             'hire_date', 'gender' => $query->orderBy('e.'.$f->sortBy, $dir),
-            'salary' => $query->orderByRaw("(SELECT s_k.salary FROM salaries s_k
-                WHERE s_k.emp_no = e.emp_no AND s_k.to_date = '".self::CURRENT."' LIMIT 1) ".$dir),
+            'salary' => $query->orderByRaw('(SELECT s_k.salary FROM salaries s_k
+                WHERE s_k.emp_no = e.emp_no AND '.HistoryRows::sql('s_k')." AND s_k.to_date = '".self::CURRENT."' LIMIT 1) ".$dir),
             'department' => $query->orderByRaw('(SELECT d.dept_name FROM dept_emp de_k
                 JOIN departments d ON d.dept_no = de_k.dept_no
-                WHERE de_k.emp_no = e.emp_no
+                WHERE de_k.emp_no = e.emp_no AND '.HistoryRows::sql('de_k').'
                 ORDER BY de_k.to_date DESC, de_k.dept_no ASC LIMIT 1) '.$dir),
             'title' => $query->orderByRaw('(SELECT t_k.title FROM titles t_k
-                WHERE t_k.emp_no = e.emp_no AND t_k.to_date IS NOT NULL
+                WHERE t_k.emp_no = e.emp_no AND '.HistoryRows::sql('t_k').' AND t_k.to_date IS NOT NULL
                 ORDER BY t_k.to_date DESC, t_k.title ASC, t_k.from_date ASC LIMIT 1) '.$dir),
             default => null,
         };
@@ -296,14 +298,14 @@ class EmployeeSearchQuery
 
         $rows = DB::table('employees as e')
             ->leftJoin('dept_emp as de_current', function ($join) {
-                $join->on('e.emp_no', '=', 'de_current.emp_no')->where('de_current.to_date', '=', self::CURRENT);
+                HistoryRows::active($join->on('e.emp_no', '=', 'de_current.emp_no'), 'de_current')->where('de_current.to_date', '=', self::CURRENT);
             })
             ->leftJoin('departments as d_current', 'de_current.dept_no', '=', 'd_current.dept_no')
             ->leftJoin('titles as t_current', function ($join) {
-                $join->on('e.emp_no', '=', 't_current.emp_no')->where('t_current.to_date', '=', self::CURRENT);
+                HistoryRows::active($join->on('e.emp_no', '=', 't_current.emp_no'), 't_current')->where('t_current.to_date', '=', self::CURRENT);
             })
             ->leftJoin('salaries as s_current', function ($join) {
-                $join->on('e.emp_no', '=', 's_current.emp_no')->where('s_current.to_date', '=', self::CURRENT);
+                HistoryRows::active($join->on('e.emp_no', '=', 's_current.emp_no'), 's_current')->where('s_current.to_date', '=', self::CURRENT);
             })
             ->whereIntegerInRaw('e.emp_no', $ids)
             ->select([
@@ -315,12 +317,12 @@ class EmployeeSearchQuery
                 'd_current.dept_name as current_dept_name',
                 't_current.title as current_title',
                 's_current.salary as current_salary',
-                DB::raw("(SELECT d.dept_name FROM dept_emp de_last
+                DB::raw('(SELECT d.dept_name FROM dept_emp de_last
                     JOIN departments d ON d.dept_no = de_last.dept_no
-                    WHERE de_last.emp_no = e.emp_no AND de_last.to_date <> '".self::CURRENT."'
+                    WHERE de_last.emp_no = e.emp_no AND '.HistoryRows::sql('de_last')." AND de_last.to_date <> '".self::CURRENT."'
                     ORDER BY de_last.to_date DESC, de_last.dept_no ASC LIMIT 1) as last_dept_name"),
-                DB::raw("(SELECT t_last.title FROM titles t_last
-                    WHERE t_last.emp_no = e.emp_no AND t_last.to_date <> '".self::CURRENT."'
+                DB::raw('(SELECT t_last.title FROM titles t_last
+                    WHERE t_last.emp_no = e.emp_no AND '.HistoryRows::sql('t_last')." AND t_last.to_date <> '".self::CURRENT."'
                     ORDER BY t_last.to_date DESC, t_last.title ASC, t_last.from_date ASC LIMIT 1) as last_job_title"),
             ])
             ->get()
@@ -362,12 +364,12 @@ class EmployeeSearchQuery
             // The department condition already implies the employment status.
             $this->whereEffectiveDepartment($query, $f->department, $f->employmentStatus, $this->perRowSubqueries);
         } elseif ($f->employmentStatus === 'current') {
-            $query->whereIn('e.emp_no', fn ($q) => $this->subSelect($q, 'de_st.emp_no')
-                ->from('dept_emp as de_st')
+            $query->whereIn('e.emp_no', fn ($q) => HistoryRows::active($this->subSelect($q, 'de_st.emp_no')
+                ->from('dept_emp as de_st'), 'de_st')
                 ->where('de_st.to_date', self::CURRENT));
         } elseif ($f->employmentStatus === 'former') {
-            $query->whereNotExists(fn ($q) => $this->subSelect($q)
-                ->from('dept_emp as de_st')
+            $query->whereNotExists(fn ($q) => HistoryRows::active($this->subSelect($q)
+                ->from('dept_emp as de_st'), 'de_st')
                 ->whereColumn('de_st.emp_no', 'e.emp_no')
                 ->where('de_st.to_date', self::CURRENT));
         }
@@ -377,8 +379,8 @@ class EmployeeSearchQuery
         }
 
         if ($withSalaryFilter && $f->filtersBySalary()) {
-            $query->whereIn('e.emp_no', fn ($q) => $this->whereSalaryBetween($this->subSelect($q, 's_f.emp_no')
-                ->from('salaries as s_f')
+            $query->whereIn('e.emp_no', fn ($q) => $this->whereSalaryBetween(HistoryRows::active($this->subSelect($q, 's_f.emp_no')
+                ->from('salaries as s_f'), 's_f')
                 ->where('s_f.to_date', self::CURRENT), 's_f.salary'));
         }
 
@@ -411,7 +413,7 @@ class EmployeeSearchQuery
                 // range filter (if any) is applied to the same join.
                 $withSalary = fn () => $this->whereSalaryBetween($this->filtered(withSalaryFilter: false)
                     ->join('salaries as s_sort', function ($join) {
-                        $join->on('s_sort.emp_no', '=', 'e.emp_no')->where('s_sort.to_date', '=', self::CURRENT);
+                        HistoryRows::active($join->on('s_sort.emp_no', '=', 'e.emp_no'), 's_sort')->where('s_sort.to_date', '=', self::CURRENT);
                     }), 's_sort.salary')
                     ->select('e.emp_no')
                     ->orderBy('s_sort.salary', $dir)
@@ -421,8 +423,8 @@ class EmployeeSearchQuery
                     return [$withSalary];
                 }
 
-                $withoutSalary = fn () => $byEmpNo()->whereNotExists(fn ($q) => $this->subSelect($q)
-                    ->from('salaries as s_none')
+                $withoutSalary = fn () => $byEmpNo()->whereNotExists(fn ($q) => HistoryRows::active($this->subSelect($q)
+                    ->from('salaries as s_none'), 's_none')
                     ->whereColumn('s_none.emp_no', 'e.emp_no')
                     ->where('s_none.to_date', self::CURRENT));
 
@@ -440,8 +442,8 @@ class EmployeeSearchQuery
                 );
 
                 return $this->withNullSegment($segments, $dir, 'dept_emp', fn () => $byEmpNo()
-                    ->whereNotExists(fn ($q) => $this->subSelect($q)
-                        ->from('dept_emp as de_none')
+                    ->whereNotExists(fn ($q) => HistoryRows::active($this->subSelect($q)
+                        ->from('dept_emp as de_none'), 'de_none')
                         ->whereColumn('de_none.emp_no', 'e.emp_no')));
 
             case 'title':
@@ -451,12 +453,12 @@ class EmployeeSearchQuery
 
                 $segments = array_map(
                     fn ($title) => fn () => $this->whereEffectiveTitle($byEmpNo(), $title, false),
-                    DB::table('titles')->distinct()->orderBy('title', $dir)->pluck('title')->all()
+                    HistoryRows::active(DB::table('titles'))->distinct()->orderBy('title', $dir)->pluck('title')->all()
                 );
 
                 return $this->withNullSegment($segments, $dir, 'titles', fn () => $byEmpNo()
-                    ->whereNotExists(fn ($q) => $this->subSelect($q)
-                        ->from('titles as t_none')
+                    ->whereNotExists(fn ($q) => HistoryRows::active($this->subSelect($q)
+                        ->from('titles as t_none'), 't_none')
                         ->whereColumn('t_none.emp_no', 'e.emp_no')
                         ->whereNotNull('t_none.to_date')));
 
@@ -475,8 +477,8 @@ class EmployeeSearchQuery
     private function withNullSegment(array $segments, string $dir, string $historyTable, Closure $nullSegment): array
     {
         $everyoneHasHistory = DB::table('employees')->count()
-            === DB::table($historyTable)->distinct()->count('emp_no')
-            && ! DB::table($historyTable)->whereNull('to_date')->exists();
+            === HistoryRows::active(DB::table($historyTable))->distinct()->count('emp_no')
+            && ! HistoryRows::active(DB::table($historyTable))->whereNull('to_date')->exists();
 
         if ($everyoneHasHistory) {
             return $segments;
@@ -510,12 +512,12 @@ class EmployeeSearchQuery
      */
     public static function departmentMembership(Builder $deptEmp, string $deptNo, string $status = 'all', bool $perRowLastCheck = false): Builder
     {
-        $deptEmp->where('de_f.dept_no', $deptNo);
+        HistoryRows::active($deptEmp, 'de_f')->where('de_f.dept_no', $deptNo);
 
         $isLast = function ($w) use ($perRowLastCheck) {
             $w->where('de_f.to_date', '<>', self::CURRENT)
-                ->whereNotExists(fn ($later) => $later->select(DB::raw($perRowLastCheck ? '/*+ NO_SEMIJOIN() */ 1' : '1'))
-                    ->from('dept_emp as de_l')
+                ->whereNotExists(fn ($later) => HistoryRows::active($later->select(DB::raw($perRowLastCheck ? '/*+ NO_SEMIJOIN() */ 1' : '1'))
+                    ->from('dept_emp as de_l'), 'de_l')
                     ->whereColumn('de_l.emp_no', 'de_f.emp_no')
                     ->where(fn ($o) => $o->whereColumn('de_l.to_date', '>', 'de_f.to_date')
                         ->orWhere(fn ($t) => $t->whereColumn('de_l.to_date', '=', 'de_f.to_date')
@@ -534,13 +536,13 @@ class EmployeeSearchQuery
      */
     private function whereEffectiveTitle(Builder $query, string $title, bool $perRow): Builder
     {
-        return $query->whereIn('e.emp_no', fn ($q) => $this->subSelect($q, 't_f.emp_no', $perRow)
-            ->from('titles as t_f')
+        return $query->whereIn('e.emp_no', fn ($q) => HistoryRows::active($this->subSelect($q, 't_f.emp_no', $perRow)
+            ->from('titles as t_f'), 't_f')
             ->where('t_f.title', $title)
             ->where(fn ($w) => $w->where('t_f.to_date', self::CURRENT)
                 ->orWhere(fn ($last) => $last->where('t_f.to_date', '<>', self::CURRENT)
-                    ->whereNotExists(fn ($later) => $later->select(DB::raw(1))
-                        ->from('titles as t_l')
+                    ->whereNotExists(fn ($later) => HistoryRows::active($later->select(DB::raw(1))
+                        ->from('titles as t_l'), 't_l')
                         ->whereColumn('t_l.emp_no', 't_f.emp_no')
                         ->where(fn ($o) => $o->whereColumn('t_l.to_date', '>', 't_f.to_date')
                             ->orWhere(fn ($t) => $t->whereColumn('t_l.to_date', '=', 't_f.to_date')

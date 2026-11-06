@@ -41,6 +41,20 @@ final class AuditLogPresenter
         'undone_entry_id' => 'Undone entry',
         'undone_action' => 'Undone change',
         'undone_at' => 'Change made at',
+        'voided_rows' => 'Voided records',
+        'reopened_rows' => 'Reopened records',
+        'restored_values' => 'Restored values',
+    ];
+
+    /** Payload keys holding lists of history rows (undo entries). */
+    private const HISTORY_ROW_KEYS = ['voided_rows', 'reopened_rows', 'restored_values'];
+
+    private const TABLE_LABELS = [
+        'dept_emp' => 'Department',
+        'dept_manager' => 'Management',
+        'titles' => 'Job title',
+        'salaries' => 'Salary',
+        'employees' => 'Personal data',
     ];
 
     /** Keys whose values are department numbers. */
@@ -167,6 +181,10 @@ final class AuditLogPresenter
             return $value ? __('Yes') : __('No');
         }
 
+        if (in_array($key, self::HISTORY_ROW_KEYS, true) && is_array($value)) {
+            return implode('; ', array_map(fn (array $row) => $this->historyRow($key, $this->strip($row)), $value));
+        }
+
         if (is_array($value)) {
             $value = $this->strip($value);
 
@@ -203,6 +221,49 @@ final class AuditLogPresenter
         }
 
         return (string) $value;
+    }
+
+    /**
+     * One row of an undo entry: what was voided, reopened or restored.
+     *
+     * @param  array<string, mixed>  $row  without hidden keys
+     */
+    private function historyRow(string $key, array $row): string
+    {
+        $table = (string) ($row['table'] ?? '');
+        $label = __(self::TABLE_LABELS[$table] ?? $table);
+        $what = array_filter([
+            isset($row['dept_no']) ? $this->value('dept_no', $row['dept_no']) : null,
+            isset($row['title']) ? $this->value('title', $row['title']) : null,
+            isset($row['salary']) ? $this->value('salary', $row['salary']) : null,
+        ]);
+        $subject = trim($label.' '.implode(', ', $what));
+        $from = $this->value('from_date', $row['from_date'] ?? null);
+
+        return match ($key) {
+            'voided_rows' => $subject.', '.$from.' - '.$this->value('to_date', $row['to_date'] ?? null),
+            'reopened_rows' => __(':record, from :from: end date :date removed', [
+                'record' => $subject,
+                'from' => $from,
+                'date' => $this->value('previous_to_date', $row['previous_to_date'] ?? null),
+            ]),
+            default => $subject.': '.$this->changedValues($row['replaced'] ?? [], $row['restored'] ?? []),
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $replaced
+     * @param  array<string, mixed>  $restored
+     */
+    private function changedValues(array $replaced, array $restored): string
+    {
+        $changes = [];
+        foreach ($restored as $field => $value) {
+            $changes[] = $this->fieldLabel((string) $field).': '.$this->value((string) $field, $replaced[$field] ?? null)
+                .' -> '.$this->value((string) $field, $value);
+        }
+
+        return $changes === [] ? '-' : implode(', ', $changes);
     }
 
     private function hidden(string $key): bool

@@ -5,6 +5,7 @@ namespace App\Livewire;
 use App\Models\Department;
 use App\Support\EmployeeDataCache;
 use App\Support\EmployeeVisibility;
+use App\Support\HistoryRows;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -141,13 +142,13 @@ class EmployeeFilter extends Component
     private function jobTitles(EmployeeVisibility $visibility): Collection
     {
         if (! $visibility->isDepartmentScoped()) {
-            return DB::table('titles')->select('title')->distinct()->orderBy('title')->get();
+            return HistoryRows::active(DB::table('titles'))->select('title')->distinct()->orderBy('title')->get();
         }
 
         $key = EmployeeDataCache::departmentJobTitles($visibility->department() ?? EmployeeVisibility::NO_DEPARTMENT);
 
         return Cache::remember($key, self::DEPARTMENT_TITLES_TTL, fn () => $visibility
-            ->constrain(DB::table('titles as t'), 't.emp_no')
+            ->constrain(HistoryRows::active(DB::table('titles as t'), 't'), 't.emp_no')
             ->select('t.title')
             ->distinct()
             ->orderBy('t.title')

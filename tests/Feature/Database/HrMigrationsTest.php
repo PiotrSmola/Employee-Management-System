@@ -15,7 +15,7 @@ use Tests\TestCase;
  */
 class HrMigrationsTest extends TestCase
 {
-    private const PRIMARY_KEYS = '2026_11_06_000001_add_from_date_to_department_history_primary_keys';
+    private const PRIMARY_KEYS = '2026_11_06_000001_add_void_log_id_to_history_tables';
 
     private const AUDIT_INDEXES = '2026_11_06_000002_add_filter_indexes_to_activity_log';
 
@@ -58,16 +58,22 @@ class HrMigrationsTest extends TestCase
 
     public function test_the_primary_keys_include_the_start_date_and_returns_are_possible(): void
     {
-        $this->assertSame(['emp_no', 'dept_no', 'from_date'], $this->primaryKey('dept_emp'));
-        $this->assertSame(['emp_no', 'dept_no', 'from_date'], $this->primaryKey('dept_manager'));
+        $this->assertSame(['emp_no', 'dept_no', 'from_date', 'void_log_id'], $this->primaryKey('dept_emp'));
+        $this->assertSame(['emp_no', 'dept_no', 'from_date', 'void_log_id'], $this->primaryKey('dept_manager'));
+        $this->assertSame(['emp_no', 'title', 'from_date', 'void_log_id'], $this->primaryKey('titles'));
+        $this->assertSame(['emp_no', 'from_date', 'void_log_id'], $this->primaryKey('salaries'));
 
         $this->seedHistory();
         DB::table('dept_emp')->insert(['emp_no' => 1, 'dept_no' => 'd002', 'from_date' => '1995-01-01', 'to_date' => '2000-01-01']);
         DB::table('dept_emp')->insert(['emp_no' => 1, 'dept_no' => 'd001', 'from_date' => '2000-01-01', 'to_date' => '9999-01-01']);
         DB::table('dept_manager')->insert(['emp_no' => 1, 'dept_no' => 'd001', 'from_date' => '2001-01-01', 'to_date' => '9999-01-01']);
         $this->assertSame(3, DB::table('dept_emp')->count());
+        $this->assertSame(0, DB::table('dept_emp')->max('void_log_id'));
 
-        // Same period twice is still refused, and the foreign keys still hold.
+        // A voided row may share its date with an active one ...
+        DB::table('dept_emp')->insert(['emp_no' => 1, 'dept_no' => 'd001', 'from_date' => '2000-01-01', 'to_date' => '9999-01-01', 'void_log_id' => 7]);
+
+        // ... but the same active period twice is still refused.
         $this->expectException(QueryException::class);
         DB::table('dept_emp')->insert(['emp_no' => 1, 'dept_no' => 'd001', 'from_date' => '2000-01-01', 'to_date' => '9999-01-01']);
     }
@@ -94,25 +100,48 @@ class HrMigrationsTest extends TestCase
         $this->migration(self::PRIMARY_KEYS)->up();
         $this->migration(self::PRIMARY_KEYS)->up();
 
-        $this->assertSame(['emp_no', 'dept_no', 'from_date'], $this->primaryKey('dept_emp'));
+        $this->assertSame(['emp_no', 'dept_no', 'from_date', 'void_log_id'], $this->primaryKey('dept_emp'));
         $this->assertSame(1, DB::table('dept_emp')->count());
         $this->assertSame(1, DB::table('dept_manager')->count());
     }
 
-    public function test_down_restores_the_old_key_only_without_repeated_periods(): void
+    public function test_an_older_key_with_from_date_is_upgraded_too(): void
+    {
+        $this->seedHistory();
+        DB::statement('ALTER TABLE dept_emp DROP PRIMARY KEY, DROP COLUMN void_log_id, ADD PRIMARY KEY (emp_no, dept_no, from_date)');
+
+        $this->migration(self::PRIMARY_KEYS)->up();
+
+        $this->assertSame(['emp_no', 'dept_no', 'from_date', 'void_log_id'], $this->primaryKey('dept_emp'));
+        $this->assertSame(0, DB::table('dept_emp')->value('void_log_id'));
+    }
+
+    public function test_down_restores_the_old_keys_when_nothing_depends_on_the_new_ones(): void
     {
         $this->seedHistory();
 
         $this->migration(self::PRIMARY_KEYS)->down();
+
         $this->assertSame(['emp_no', 'dept_no'], $this->primaryKey('dept_emp'));
         $this->assertSame(['emp_no', 'dept_no'], $this->primaryKey('dept_manager'));
+        $this->assertSame(['emp_no', 'title', 'from_date'], $this->primaryKey('titles'));
+        $this->assertSame(['emp_no', 'from_date'], $this->primaryKey('salaries'));
+        $this->assertFalse(Schema::hasColumn('salaries', 'void_log_id'));
+        $this->assertSame(1, DB::table('dept_emp')->count());
+    }
 
-        $this->migration(self::PRIMARY_KEYS)->up();
+    public function test_down_keeps_from_date_for_repeated_periods_and_everything_for_voided_rows(): void
+    {
+        $this->seedHistory();
         DB::table('dept_emp')->insert(['emp_no' => 1, 'dept_no' => 'd001', 'from_date' => '2000-01-01', 'to_date' => '9999-01-01']);
+        DB::table('salaries')->insert(['emp_no' => 1, 'salary' => 1, 'from_date' => '2000-01-01', 'to_date' => '9999-01-01', 'void_log_id' => 5]);
 
         $this->migration(self::PRIMARY_KEYS)->down();
-        $this->assertSame(['emp_no', 'dept_no', 'from_date'], $this->primaryKey('dept_emp'), 'Kept: an employee has two periods in d001.');
-        $this->assertSame(['emp_no', 'dept_no'], $this->primaryKey('dept_manager'));
+
+        $this->assertSame(['emp_no', 'dept_no', 'from_date'], $this->primaryKey('dept_emp'));
+        $this->assertFalse(Schema::hasColumn('dept_emp', 'void_log_id'));
+        $this->assertSame(['emp_no', 'from_date', 'void_log_id'], $this->primaryKey('salaries'));
+        $this->assertTrue(Schema::hasColumn('salaries', 'void_log_id'));
         $this->assertSame(2, DB::table('dept_emp')->count());
     }
 

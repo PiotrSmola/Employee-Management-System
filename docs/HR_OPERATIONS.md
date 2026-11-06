@@ -17,8 +17,8 @@ The dataset marks current rows with `to_date = 9999-01-01`, and a period ends on
 next one starts. Every operation keeps that shape:
 
 - a change closes the current row (`to_date` = effective date) and inserts a new one
-  (`from_date` = effective date, `to_date` = 9999-01-01); the only rows ever removed are the
-  ones **Undo last change** (below) takes back, and nothing deletes an employee;
+  (`from_date` = effective date, `to_date` = 9999-01-01). No row is ever deleted, neither from
+  the history nor from `employees`: **Undo last change** (below) voids rows instead;
 - every operation runs in one transaction that first locks the employee row
   (`SELECT ... FOR UPDATE`), so two people acting on the same employee are serialized and
   the date checks see the committed state; the audit entry is written in the same transaction;
@@ -55,10 +55,9 @@ controller authorizes `EmployeePolicy::create/update` again.
   shown as already in effect and a future termination would make the employee a former
   employee today. Scheduled changes would need an own table and a job that applies them;
   until then all dates are today or earlier.
-- **Returns to a previous department** (transfer or rehire) add a new period. Migration
-  `add_from_date_to_department_history_primary_keys` changes the primary key of `dept_emp` and
-  `dept_manager` from `(emp_no, dept_no)` to `(emp_no, dept_no, from_date)` (see *Schema*); the
-  earlier period stays unchanged. The queries of the app pick the current row by
+- **Returns to a previous department** (transfer or rehire) add a new period: `from_date` is part
+  of the primary key of `dept_emp` and `dept_manager` (see *Schema*); the earlier period stays
+  unchanged. The queries of the app pick the current row by
   `to_date = 9999-01-01` and the last department of a former employee by the latest `to_date`
   (ties: lowest `dept_no`), so they handle several periods in one department without changes.
   The forms mark such departments with "return - worked here before", the audit entry has
@@ -97,16 +96,22 @@ controller authorizes `EmployeePolicy::create/update` again.
 - **Undo last change.** The most recent HR operation on an employee - except a hire - can be
   reversed exactly, within 24 hours and only while nothing else changed that employee's records:
   - the audit entry of every operation keeps its row changes (closed rows, inserted rows,
-    changed values) and a fingerprint of all of the employee's rows afterwards
+    changed values) and a fingerprint of all of the employee's active rows afterwards
     (`changes._undo`, not shown in the UI);
   - the undo checks that the entry is still the employee's latest `employee.*` entry, not
     older than 24 h, and that the fingerprint still matches (any later change - also one by
-    another screen such as a department manager assignment - blocks the undo); then it
-    re-opens the closed rows, deletes the rows the operation inserted and restores changed
-    values, each step hitting exactly one row, all in one transaction;
-  - it is logged as `employee.change_undone` with `undone_entry_id` / `undone_action`;
-    the original entry stays. Only one level: the undo entry is now the latest one, and it
-    cannot be undone itself, so neither the undo nor the operation before it can be reversed;
+    another screen such as a department manager assignment - blocks the undo);
+  - **nothing is deleted**: the rows the operation opened get `void_log_id` = the id of the
+    undo's audit entry (who, when and why come from that entry), the rows it closed are
+    re-opened with an `UPDATE` of `to_date`, changed values are restored. Each step must hit
+    exactly one row, all in one transaction;
+  - it is logged as `employee.change_undone` with `undone_entry_id` / `undone_action` and every
+    row it touched (`voided_rows` with their values, `reopened_rows` with the previous end date,
+    `restored_values`). The original entry stays untouched. Only one level: the undo entry is
+    now the latest one, and it cannot be undone itself, so neither the undo nor the operation
+    before it can be reversed;
+  - voided rows are hidden everywhere (see *Voided rows*) and stay visible through the audit log:
+    the undo entry lists them, and the original entry shows that it was undone, by whom and when;
   - **a hire cannot be undone** (its entry has no `_undo`, the service refuses it and the profile
     offers no undo right after a hire): a wrongly entered person is handled by editing the
     personal data or by terminating the employment. Entries written without `_undo` cannot be
@@ -120,18 +125,42 @@ controller authorizes `EmployeePolicy::create/update` again.
 
 ## Schema
 
-- `dept_emp`, `dept_manager`: primary key `(emp_no, dept_no, from_date)`. The migration reads
-  the current key from `information_schema`, skips tables that already have the new key and
-  runs `ALTER TABLE ... DROP PRIMARY KEY, ADD PRIMARY KEY (...), ALGORITHM=INPLACE, LOCK=NONE`
-  (online: the table is rebuilt while reads and writes continue). The foreign key on `emp_no`
-  keeps an `emp_no`-leading index (the primary key), the one on `dept_no` its `dept_no` index.
-  `down()` restores `(emp_no, dept_no)` only when no employee has two periods in one
-  department and otherwise keeps the new key (with a message).
+- `dept_emp`, `dept_manager`, `titles`, `salaries` have the column `void_log_id` (`BIGINT UNSIGNED
+  NOT NULL DEFAULT 0`: 0 = active row, otherwise the `activity_log.id` of the undo that voided it)
+  and it is part of the primary key, so a voided row never collides with a corrected row of the
+  same date while active rows stay unique:
+
+  | Table | Primary key |
+  |-------|-------------|
+  | `dept_emp`, `dept_manager` | `(emp_no, dept_no, from_date, void_log_id)` |
+  | `titles` | `(emp_no, title, from_date, void_log_id)` |
+  | `salaries` | `(emp_no, from_date, void_log_id)` |
+
+  Migration `add_void_log_id_to_history_tables` reads the current key from `information_schema`,
+  changes only what is missing and runs one `ALTER TABLE ... ALGORITHM=INPLACE, LOCK=NONE` per
+  table (online: the table is rebuilt while reads and writes continue). The foreign keys on
+  `emp_no` keep an `emp_no`-leading index (the primary key), the one on `dept_no` its `dept_no`
+  index. InnoDB secondary indexes contain the primary key columns, so the directory indexes
+  stay usable as covering indexes with the `void_log_id = 0` condition. `down()` leaves a table
+  with voided rows as it is; otherwise it drops the column and restores the old key
+  (`dept_emp` / `dept_manager` keep `from_date` if an employee has several periods in one
+  department).
 - `employees`: index `(birth_date, last_name, first_name)` for the duplicate check of the hire
   form (migration `add_duplicate_check_index_to_employees`, idempotent, built online).
 - `activity_log`: virtual generated column `action_group` (`employee` for `employee.hired`)
   with the index `(action_group, created_at)`, and the index `(user_id, created_at)`
   (migration `add_filter_indexes_to_activity_log`).
+
+## Voided rows
+
+`dept_emp`, `dept_manager`, `titles` and `salaries` can hold rows that do not exist for the
+application. **Every query over these tables excludes them** with `App\Support\HistoryRows`
+(`HistoryRows::active($query, 'alias')`, `HistoryRows::sql('alias')` for raw SQL); the models
+`DeptEmp`, `DeptManager`, `Title`, `Salary` do it with a global scope, the relations of `Employee`
+and `Department` with `wherePivot`. Voided rows play no part in the rules of the HR operations
+(a new row may start on the date of a voided one). `VoidedRowsTest` checks list, filters, sorts,
+counts, profile, charts, PDF, CSV, dashboard and manager scope; `VoidedRowsGuardTest` scans
+`app/` and fails for a query over these tables without the filter, and for a `DELETE` on them.
 
 ## Audit entries (`changes`)
 
@@ -147,7 +176,10 @@ employee.terminated     {"before": {"dept_no": "d005", "title": "Engineer", "sal
 employee.rehired        {"after": {"dept_no": "d007", "title": "Staff", "salary": 50000}, "effective_date": "2025-01-01", "previous_end_date": "2024-09-30", "returning": true, "closed_stray_records": ["dept_manager"], "ended_management": ["d007"]}
 employee.salary_corrected / employee.title_corrected
                         {"before": {...}, "after": {...}, "from_date": "...", "to_date": "...", "reason": "..."}
-employee.change_undone  {"undone_entry_id": 123, "undone_action": "employee.transferred", "undone_at": "...", "before": {...}, "after": {...}}
+employee.change_undone  {"undone_entry_id": 123, "undone_action": "employee.transferred", "undone_at": "...", "before": {...}, "after": {...},
+                         "voided_rows": [{"table": "dept_emp", "dept_no": "d005", "from_date": "...", "to_date": "9999-01-01"}],
+                         "reopened_rows": [{"table": "dept_emp", "dept_no": "d004", "from_date": "...", "previous_to_date": "..."}],
+                         "restored_values": [{"table": "salaries", "from_date": "...", "replaced": {"salary": 61000}, "restored": {"salary": 60000}}]}
 ```
 
 Optional keys (`ended_management`, `reason`, `requested_percent`, ...) are left out when empty.
@@ -162,7 +194,8 @@ date range (`from` / `to`, inclusive, 1970-01-01 to 9999-12-30). Invalid filter 
 ignored. The `changes` are shown as *field: before → after* rows (departments with their name,
 amounts with separators, dates as `d.m.Y`); employees link to their profile, users to the Users
 screen (administrators), departments to `departments.show` once that route exists. Names and
-values are escaped like all Blade output.
+values are escaped like all Blade output. An undone entry shows when and by whom it was undone;
+the undo entry lists the voided, reopened and restored records.
 
 Sign-in entries (`auth.*`: e-mail addresses of failed sign-ins, IP addresses) are account
 security data and only listed for administrators (`manage-users`).

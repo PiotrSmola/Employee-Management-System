@@ -150,12 +150,35 @@ Signature: `AuditLogger::log(string $action, string $subjectType, string|int|nul
   as *before → after*, other keys as values, `dept_no` with the department name. Departments link to
   `route('departments.show', $dept_no)` as soon as that route exists.
 
+## Reading the history tables: `App\Support\HistoryRows`
+
+`dept_emp`, `dept_manager`, `titles` and `salaries` can hold **voided rows**: undoing an HR
+operation never deletes anything, it sets `void_log_id` on the rows the operation added
+(0 = active row). Voided rows do not exist for the application, so **every query over these
+four tables must exclude them**:
+
+```php
+use App\Support\HistoryRows;
+
+HistoryRows::active(DB::table('salaries'))->where('emp_no', $empNo)->get();
+HistoryRows::active(DB::table('titles as t'), 't')->...;                                // alias
+HistoryRows::active($query->from('dept_emp as de'), 'de');                              // sub-query
+->leftJoin('titles as t', fn ($join) => HistoryRows::active($join->on('t.emp_no', '=', 'e.emp_no'), 't'))
+DB::raw('(SELECT ... FROM salaries s WHERE s.emp_no = e.emp_no AND '.HistoryRows::sql('s').')')
+->belongsToMany(...)->wherePivot(HistoryRows::COLUMN, HistoryRows::ACTIVE)
+```
+
+The models `Salary`, `Title`, `DeptEmp` and `DeptManager` apply it with a global scope, and
+`EmployeeSearchQuery::departmentMembership()` applies it itself. Never `DELETE` from these
+tables. `tests/Feature/HrOperations/VoidedRowsGuardTest.php` fails for code under `app/` that
+reads them without the filter (a reasoned exception goes into its allowlist).
+
 ## Changing employees: `App\Services\EmployeeOperationsService`
 
 Hire, transfer, title / salary changes, termination and rehire go through this service (it
 keeps the history shape, locks the employee, audits and flushes the cache). `dept_emp` and
-`dept_manager` have the primary key `(emp_no, dept_no, from_date)`: an employee can have several
-periods in one department - pick the current one by `to_date = 9999-01-01` and the last one by
+`dept_manager` have `from_date` in the primary key: an employee can have several periods in one
+department - pick the current one by `to_date = 9999-01-01` and the last one by
 the latest `to_date`, never by `(emp_no, dept_no)` alone. Code that inserts
 employees itself (e.g. an import) takes the number from `EmployeeNumberAllocator::next()`
 inside its transaction. See [HR_OPERATIONS.md](HR_OPERATIONS.md).

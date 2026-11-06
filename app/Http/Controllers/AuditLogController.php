@@ -82,6 +82,7 @@ class AuditLogController extends Controller
                 ->get(['emp_no', 'first_name', 'last_name'])
                 ->mapWithKeys(fn (Employee $e) => [(string) $e->emp_no => $e->first_name.' '.$e->last_name]),
             'departmentNames' => $departmentNames,
+            'undoneBy' => ActivityLog::undoEntriesFor($entries->getCollection()),
             'presenter' => new AuditLogPresenter($departmentNames, EmployeeVisibility::for($request->user())->canSeeSalaries()),
         ]);
     }

@@ -7,7 +7,9 @@ use App\Models\Department;
 use App\Models\Employee;
 use App\Support\EmployeeDataCache;
 use App\Support\EmploymentRules;
+use App\Support\HistoryRows;
 use Closure;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Collection;
@@ -24,7 +26,8 @@ use Throwable;
  *
  * History is never deleted: a change closes the current row (to_date = the
  * effective date) and opens a new one (from_date = the effective date,
- * to_date = 9999-01-01), the convention of the dataset.
+ * to_date = 9999-01-01), the convention of the dataset. Only active rows count
+ * here; rows voided by an undo ({@see HistoryRows}) play no part in any rule.
  *
  * Every operation
  *  - runs in one transaction and first locks the employee row (SELECT ... FOR
@@ -257,7 +260,7 @@ class EmployeeOperationsService
             $managed = $this->currentRows('dept_manager', $empNo)->whereIn('dept_no', $from);
             $this->assertEffectiveDate('effective_date', $date, $this->transferMinimum($current, $managed));
             $this->assertPeriodIsFree('effective_date', $empNo, $deptNo, $date);
-            $returning = DB::table('dept_emp')->where('emp_no', $empNo)->where('dept_no', $deptNo)->exists();
+            $returning = $this->rows('dept_emp')->where('emp_no', $empNo)->where('dept_no', $deptNo)->exists();
 
             $this->ops = [];
             $this->closeRows('dept_emp', $current, $date);
@@ -483,7 +486,7 @@ class EmployeeOperationsService
                 'after' => ['dept_no' => $deptNo, 'title' => $title, 'salary' => $salary],
                 'effective_date' => $date,
                 'previous_end_date' => $previousEnd,
-                'returning' => DB::table('dept_emp')->where('emp_no', $empNo)->where('dept_no', $deptNo)->count() > 1 ?: null,
+                'returning' => $this->rows('dept_emp')->where('emp_no', $empNo)->where('dept_no', $deptNo)->count() > 1 ?: null,
                 'closed_stray_records' => array_keys($stray),
                 'ended_management' => isset($stray['dept_manager']) ? $stray['dept_manager']->pluck('dept_no')->values()->all() : [],
             ], fn ($value) => $value !== null && $value !== []));
@@ -508,7 +511,7 @@ class EmployeeOperationsService
             $empNo = $employee->emp_no;
             $departments = $this->requireCurrentEmployment($employee, 'salary', __('Corrections are only possible for current employees.'));
 
-            $latest = DB::table('salaries')->where('emp_no', $empNo)->orderByDesc('from_date')->lockForUpdate()->first();
+            $latest = $this->rows('salaries')->where('emp_no', $empNo)->orderByDesc('from_date')->lockForUpdate()->first();
             if ($latest === null) {
                 throw ValidationException::withMessages(['salary' => __(':name has no salary history.', ['name' => $this->name($employee)])]);
             }
@@ -520,7 +523,7 @@ class EmployeeOperationsService
             }
 
             $key = ['emp_no' => $empNo, 'from_date' => $latest->from_date];
-            DB::table('salaries')->where($key)->update(['salary' => $salary]);
+            $this->rows('salaries')->where($key)->update(['salary' => $salary]);
             $this->ops = [['set', 'salaries', $key, ['salary' => (int) $latest->salary], ['salary' => $salary]]];
 
             $this->log('employee.salary_corrected', $empNo, [
@@ -559,13 +562,13 @@ class EmployeeOperationsService
             if ($latest->title === $title) {
                 throw ValidationException::withMessages(['title' => __('The job title is unchanged.')]);
             }
-            $taken = DB::table('titles')->where('emp_no', $empNo)->where('from_date', $latest->from_date)
+            $taken = $this->rows('titles')->where('emp_no', $empNo)->where('from_date', $latest->from_date)
                 ->where('title', $title)->exists();
             if ($taken && mb_strtolower($latest->title) !== mb_strtolower($title)) {
                 throw ValidationException::withMessages(['title' => __('A job title row with this title and start date already exists.')]);
             }
 
-            DB::table('titles')->where('emp_no', $empNo)->where('from_date', $latest->from_date)
+            $this->rows('titles')->where('emp_no', $empNo)->where('from_date', $latest->from_date)
                 ->where('title', $latest->title)->update(['title' => $title]);
             $this->ops = [['set', 'titles', ['emp_no' => $empNo, 'title' => $title, 'from_date' => $latest->from_date], ['title' => $latest->title], ['title' => $title]]];
 
@@ -596,9 +599,10 @@ class EmployeeOperationsService
     /**
      * Reverse the most recent HR operation on the employee ($entryId, the entry
      * the user saw): only within UNDO_HOURS and only if nothing changed the
-     * employee's records since. Closed rows are re-opened, rows the operation
-     * added are deleted, corrected values restored. Logged as employee.change_undone.
-     * A hire cannot be undone.
+     * employee's records since. Closed rows are re-opened, corrected values restored
+     * and the rows the operation added are voided (void_log_id = the undo's audit
+     * entry): nothing is deleted. The entry, employee.change_undone, records every
+     * row it touched; the original entry stays as it is. A hire cannot be undone.
      *
      * @return string the action that was undone
      *
@@ -626,17 +630,19 @@ class EmployeeOperationsService
                 }
             }
 
-            foreach (array_reverse($ops) as $change) {
-                $this->reverse($change);
-            }
-
-            AuditLogger::log('employee.change_undone', ActivityLog::SUBJECT_EMPLOYEE, $empNo, [
+            // Written first: the voided rows point at this entry.
+            $undo = AuditLogger::log(ActivityLog::ACTION_CHANGE_UNDONE, ActivityLog::SUBJECT_EMPLOYEE, $empNo, array_filter([
                 'undone_entry_id' => $entry->id,
                 'undone_action' => $entry->action,
                 'undone_at' => $entry->created_at->format('Y-m-d H:i:s'),
                 'before' => $entry->changes['after'] ?? null,
                 'after' => $entry->changes['before'] ?? null,
-            ]);
+                ...$this->undoDetails($ops),
+            ], fn ($value) => $value !== null && $value !== []));
+
+            foreach (array_reverse($ops) as $change) {
+                $this->reverse($change, $undo->id);
+            }
 
             return [$entry->action, $departments];
         });
@@ -657,11 +663,11 @@ class EmployeeOperationsService
         $empNo = $employee->emp_no;
 
         $departments = Department::query()->orderBy('dept_name')->get(['dept_no', 'dept_name']);
-        $history = DB::table('dept_emp')->where('emp_no', $empNo)->orderBy('from_date')->get();
+        $history = $this->rows('dept_emp')->where('emp_no', $empNo)->orderBy('from_date')->get();
         $current = $history->where('to_date', self::CURRENT)->values();
-        $managed = DB::table('dept_manager')->where('emp_no', $empNo)->where('to_date', self::CURRENT)->get();
-        $titles = DB::table('titles')->where('emp_no', $empNo)->where('to_date', self::CURRENT)->get();
-        $salaries = DB::table('salaries')->where('emp_no', $empNo)->where('to_date', self::CURRENT)->get();
+        $managed = $this->rows('dept_manager')->where('emp_no', $empNo)->where('to_date', self::CURRENT)->get();
+        $titles = $this->rows('titles')->where('emp_no', $empNo)->where('to_date', self::CURRENT)->get();
+        $salaries = $this->rows('salaries')->where('emp_no', $empNo)->where('to_date', self::CURRENT)->get();
         $managedHere = $managed->whereIn('dept_no', $current->pluck('dept_no'));
         $isCurrent = $current->isNotEmpty();
         $employmentEnd = $isCurrent ? null : $this->employmentEnd($empNo);
@@ -677,7 +683,7 @@ class EmployeeOperationsService
             'currentTitle' => $titles->sortByDesc('from_date')->first()?->title,
             'currentSalary' => ($salary = $salaries->sortByDesc('from_date')->first()) ? (int) $salary->salary : null,
             'latestTitle' => $this->latestTitle($empNo),
-            'latestSalary' => DB::table('salaries')->where('emp_no', $empNo)->orderByDesc('from_date')->first(),
+            'latestSalary' => $this->rows('salaries')->where('emp_no', $empNo)->orderByDesc('from_date')->first(),
             'titleOptions' => $this->titleOptions(),
             'employmentEnd' => $employmentEnd,
             'today' => EmploymentRules::today(),
@@ -703,10 +709,18 @@ class EmployeeOperationsService
     public function titleOptions(): array
     {
         return Cache::remember(EmployeeDataCache::JOB_TITLES, 3600,
-            fn () => DB::table('titles')->distinct()->orderBy('title')->pluck('title')->all());
+            fn () => $this->rows('titles')->distinct()->orderBy('title')->pluck('title')->all());
     }
 
     // ------------------------------------------------------------------ internals
+
+    /**
+     * Active rows of a history table.
+     */
+    private function rows(string $table): Builder
+    {
+        return HistoryRows::active(DB::table($table));
+    }
 
     private function lock(Employee $employee): Employee
     {
@@ -753,7 +767,7 @@ class EmployeeOperationsService
      */
     private function currentRows(string $table, int $empNo): Collection
     {
-        return DB::table($table)->where('emp_no', $empNo)->where('to_date', self::CURRENT)->lockForUpdate()->get();
+        return $this->rows($table)->where('emp_no', $empNo)->where('to_date', self::CURRENT)->lockForUpdate()->get();
     }
 
     /**
@@ -763,7 +777,7 @@ class EmployeeOperationsService
     {
         foreach ($rows as $row) {
             $key = $this->key($table, $row);
-            DB::table($table)->where($key)->where('to_date', self::CURRENT)->update(['to_date' => $date]);
+            $this->rows($table)->where($key)->where('to_date', self::CURRENT)->update(['to_date' => $date]);
             $this->ops[] = ['close', $table, $key, $date];
         }
     }
@@ -795,7 +809,7 @@ class EmployeeOperationsService
      */
     private function currentDepartments(int $empNo): array
     {
-        return DB::table('dept_emp')->where('emp_no', $empNo)->where('to_date', self::CURRENT)->pluck('dept_no')->all();
+        return $this->rows('dept_emp')->where('emp_no', $empNo)->where('to_date', self::CURRENT)->pluck('dept_no')->all();
     }
 
     /**
@@ -836,13 +850,14 @@ class EmployeeOperationsService
     }
 
     /**
-     * Fingerprint of everything stored about the employee (employees row and all history rows).
+     * Fingerprint of everything the application sees of the employee (employees row
+     * and all active history rows); voided rows are not part of it.
      */
     private function stateHash(int $empNo): string
     {
         $state = ['employees' => (array) DB::table('employees')->where('emp_no', $empNo)->first()];
         foreach (self::KEYS as $table => $columns) {
-            $state[$table] = DB::table($table)->where('emp_no', $empNo)->orderBy('from_date')->orderBy($columns[1])
+            $state[$table] = $this->rows($table)->where('emp_no', $empNo)->orderBy('from_date')->orderBy($columns[1])
                 ->get()->map(fn ($row) => array_map('strval', (array) $row))->all();
         }
 
@@ -869,26 +884,67 @@ class EmployeeOperationsService
     }
 
     /**
-     * Reverse one recorded row change; it must hit exactly one row.
+     * What an undo does to each row, with the values of the rows it voids, for its audit entry.
+     *
+     * @param  array<int, array<int, mixed>>  $ops
+     * @return array{voided_rows: array<int, array<string, mixed>>, reopened_rows: array<int, array<string, mixed>>, restored_values: array<int, array<string, mixed>>}
+     *
+     * @throws ValidationException
+     */
+    private function undoDetails(array $ops): array
+    {
+        $details = ['voided_rows' => [], 'reopened_rows' => [], 'restored_values' => []];
+
+        foreach ($ops as $change) {
+            [$op, $table, $key] = $change;
+            $where = ['table' => $table, ...array_diff_key($key, ['emp_no' => true])];
+
+            if ($op === 'insert') {
+                $row = $this->rows($table)->where($key)->first();
+                if ($row === null) {
+                    $this->undoMismatch();
+                }
+                $details['voided_rows'][] = ['table' => $table, ...array_diff_key((array) $row, ['emp_no' => true, HistoryRows::COLUMN => true])];
+            } elseif ($op === 'close') {
+                $details['reopened_rows'][] = [...$where, 'previous_to_date' => $change[3]];
+            } else {
+                $details['restored_values'][] = [...$where, 'replaced' => $change[4], 'restored' => $change[3]];
+            }
+        }
+
+        return $details;
+    }
+
+    /**
+     * Reverse one recorded row change; it must hit exactly one row. Nothing is
+     * deleted: a row the operation added is voided with $voidLogId.
      *
      * @param  array<int, mixed>  $change
      *
      * @throws ValidationException
      */
-    private function reverse(array $change): void
+    private function reverse(array $change, int $voidLogId): void
     {
         [$op, $table, $key] = $change;
-        $query = DB::table($table)->where($key);
+        $query = $table === 'employees' ? DB::table('employees')->where($key) : $this->rows($table)->where($key);
 
         $affected = match ($op) {
             'close' => $query->where('to_date', $change[3])->update(['to_date' => self::CURRENT]),
-            'insert' => $query->delete(),
+            'insert' => $query->update([HistoryRows::COLUMN => $voidLogId]),
             'set' => $query->update($change[3]),
         };
 
         if ($affected !== 1) {
-            throw ValidationException::withMessages(['undo' => __('The records of this employee do not match the change any more, so it cannot be undone.')]);
+            $this->undoMismatch();
         }
+    }
+
+    /**
+     * @throws ValidationException
+     */
+    private function undoMismatch(): never
+    {
+        throw ValidationException::withMessages(['undo' => __('The records of this employee do not match the change any more, so it cannot be undone.')]);
     }
 
     /**
@@ -897,7 +953,7 @@ class EmployeeOperationsService
      */
     private function nextFrom(string $table, int $empNo): ?string
     {
-        $latest = DB::table($table)->where('emp_no', $empNo)->max('from_date');
+        $latest = $this->rows($table)->where('emp_no', $empNo)->max('from_date');
 
         return $latest === null ? null : EmploymentRules::dayAfter($latest);
     }
@@ -923,7 +979,7 @@ class EmployeeOperationsService
     private function firstHistoryDate(int $empNo): ?string
     {
         $dates = array_map(
-            fn (string $table) => DB::table($table)->where('emp_no', $empNo)->min('from_date'),
+            fn (string $table) => $this->rows($table)->where('emp_no', $empNo)->min('from_date'),
             ['dept_emp', 'titles', 'salaries', 'dept_manager'],
         );
         $dates = array_filter($dates);
@@ -938,8 +994,8 @@ class EmployeeOperationsService
     {
         $dates = [];
         foreach (['dept_emp', 'titles', 'salaries', 'dept_manager'] as $table) {
-            $dates[] = DB::table($table)->where('emp_no', $empNo)->where('to_date', '<>', self::CURRENT)->max('to_date');
-            $dates[] = DB::table($table)->where('emp_no', $empNo)->max('from_date');
+            $dates[] = $this->rows($table)->where('emp_no', $empNo)->where('to_date', '<>', self::CURRENT)->max('to_date');
+            $dates[] = $this->rows($table)->where('emp_no', $empNo)->max('from_date');
         }
 
         return EmploymentRules::latest(...$dates);
@@ -947,7 +1003,7 @@ class EmployeeOperationsService
 
     private function latestTitle(int $empNo, bool $lock = false): ?object
     {
-        return DB::table('titles')->where('emp_no', $empNo)
+        return $this->rows('titles')->where('emp_no', $empNo)
             ->orderByDesc('from_date')
             ->orderByRaw('to_date = ? desc', [self::CURRENT])
             ->when($lock, fn ($query) => $query->lockForUpdate())
@@ -993,7 +1049,7 @@ class EmployeeOperationsService
      */
     private function assertPeriodIsFree(string $field, int $empNo, string $deptNo, string $date): void
     {
-        if (DB::table('dept_emp')->where(['emp_no' => $empNo, 'dept_no' => $deptNo, 'from_date' => $date])->exists()) {
+        if ($this->rows('dept_emp')->where(['emp_no' => $empNo, 'dept_no' => $deptNo, 'from_date' => $date])->exists()) {
             throw ValidationException::withMessages([$field => __('A period in this department already starts on this date.')]);
         }
     }

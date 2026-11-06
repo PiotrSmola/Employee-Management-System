@@ -26,6 +26,9 @@ class EmployeeChangeHistory extends Component
 
     public AuditLogPresenter $presenter;
 
+    /** @var array<int, ActivityLog> undo entries by the id of the entry they undid */
+    public array $undoneBy;
+
     public function __construct(public Employee $employee)
     {
         $entries = ActivityLog::forSubject(ActivityLog::SUBJECT_EMPLOYEE, $employee->emp_no)
@@ -36,6 +39,7 @@ class EmployeeChangeHistory extends Component
 
         $this->hasMore = $entries->count() > self::LIMIT;
         $this->entries = $entries->take(self::LIMIT);
+        $this->undoneBy = ActivityLog::undoEntriesFor($this->entries);
 
         $user = auth()->user();
         $this->presenter = new AuditLogPresenter(

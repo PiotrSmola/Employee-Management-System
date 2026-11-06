@@ -95,12 +95,77 @@ class UndoTest extends HrOperationsTestCase
         $this->assertSame($before, $this->records($employee->emp_no));
         $undone = $this->onlyEntry('employee.change_undone');
         $this->assertSame($entry->id, $undone->changes['undone_entry_id']);
+        $this->assertEquals($entry->changes, ActivityLog::find($entry->id)->changes, 'The original entry stays untouched.');
         $this->assertSame($action, $undone->changes['undone_action']);
         $this->assertCacheFlushed([$department->dept_no]);
 
         // Only one level: the undo itself cannot be undone.
         $this->get($this->profile($employee))->assertDontSee('Undo last change');
         $this->undo($employee, $undone->id)->assertSessionHasErrorsIn('undo', ['undo' => 'The last change cannot be undone.']);
+    }
+
+    public function test_nothing_is_deleted_rows_are_voided_and_recorded(): void
+    {
+        $sales = Department::factory()->create(['dept_name' => 'Sales']);
+        $research = Department::factory()->create(['dept_name' => 'Research']);
+        $employee = $this->currentEmployee($sales, salary: 60000);
+        $rowCounts = fn () => array_map(fn (string $t) => DB::table($t)->where('emp_no', $employee->emp_no)->count(), ['dept_emp', 'salaries', 'titles']);
+
+        $this->post(route('employees.transfer', $employee->emp_no), ['dept_no' => $research->dept_no, 'effective_date' => '2024-05-01'])->assertSessionHasNoErrors();
+        $counts = $rowCounts();
+        $this->undo($employee)->assertSessionHasNoErrors();
+
+        $undo = ActivityLog::where('action', 'employee.change_undone')->sole();
+        $this->assertSame($counts, $rowCounts(), 'No row is deleted.');
+        $this->assertSame([$undo->id], DB::table('dept_emp')->where('emp_no', $employee->emp_no)->where('dept_no', $research->dept_no)->pluck('void_log_id')->all());
+        $this->assertSame($sales->dept_no, $this->current('dept_emp', $employee->emp_no)->dept_no);
+        $this->assertEquals([['table' => 'dept_emp', 'dept_no' => $research->dept_no, 'from_date' => '2024-05-01', 'to_date' => self::CURRENT]], $undo->changes['voided_rows']);
+        $this->assertEquals([['table' => 'dept_emp', 'dept_no' => $sales->dept_no, 'from_date' => self::HIRED, 'previous_to_date' => '2024-05-01']], $undo->changes['reopened_rows']);
+        $this->assertArrayNotHasKey('_undo', $undo->changes);
+    }
+
+    public function test_a_corrected_row_can_take_the_date_of_a_voided_one(): void
+    {
+        $employee = $this->currentEmployee(salary: 60000);
+        $url = route('employees.salary', $employee->emp_no);
+
+        $this->post($url, ['mode' => 'amount', 'salary' => '61000', 'effective_date' => '2024-01-01'])->assertSessionHasNoErrors();
+        $this->undo($employee)->assertSessionHasNoErrors();
+        $this->post($url, ['mode' => 'amount', 'salary' => '62000', 'effective_date' => '2024-01-01'])->assertSessionHasNoErrors();
+        $this->undo($employee)->assertSessionHasNoErrors();
+        $this->post($url, ['mode' => 'amount', 'salary' => '63000', 'effective_date' => '2024-01-01'])->assertSessionHasNoErrors();
+
+        $this->assertSame(63000, $this->current('salaries', $employee->emp_no)->salary);
+        $this->assertSame(3, DB::table('salaries')->where('emp_no', $employee->emp_no)->where('from_date', '2024-01-01')->count());
+    }
+
+    public function test_the_audit_log_shows_what_an_undo_did_without_salaries_for_those_not_allowed(): void
+    {
+        $employee = $this->currentEmployee(salary: 60000);
+        $this->post(route('employees.salary', $employee->emp_no), ['mode' => 'amount', 'salary' => '61000', 'effective_date' => '2024-01-01'])->assertSessionHasNoErrors();
+        $original = $this->latestEntryId();
+        $this->undo($employee)->assertSessionHasNoErrors();
+        $undo = $this->latestEntryId();
+
+        foreach ([route('audit-log.index'), $this->profile($employee)] as $url) {
+            $this->get($url)
+                ->assertOk()
+                ->assertSee('Undone on')
+                ->assertSee('(entry #'.$undo.')')
+                ->assertSee('Voided records')
+                ->assertSee('Salary 61,000, 01.01.2024 - present')
+                ->assertSee('Reopened records')
+                ->assertSee('end date 01.01.2024 removed');
+        }
+
+        // Voided rows are hidden from the profile's own history.
+        $this->get($this->profile($employee))->assertViewHas('salaryHistory', fn ($rows) => ! $rows->contains('salary', 61000));
+
+        $presenter = new \App\Support\AuditLogPresenter([], withSalaries: false);
+        $text = collect($presenter->rows(ActivityLog::find($undo)->changes))->pluck('after')->implode(' ');
+        $this->assertStringContainsString('Salary, 01.01.2024 - present', $text);
+        $this->assertStringNotContainsString('61,000', $text);
+        $this->assertNotNull($original);
     }
 
     public function test_a_rehire_is_undone(): void

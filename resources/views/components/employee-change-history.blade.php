@@ -33,6 +33,7 @@
                                 </small>
                             </div>
                             @include('audit-log.partials.changes', ['changes' => $entry->changes, 'presenter' => $presenter])
+                            @include('audit-log.partials.undone', ['undo' => $undoneBy[$entry->id] ?? null])
                         </li>
                     @endforeach
                 </ul>

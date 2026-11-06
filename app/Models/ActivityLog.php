@@ -26,6 +26,9 @@ class ActivityLog extends Model
 
     public const SUBJECT_USER = 'user';
 
+    /** Entry of an undone HR operation; `changes.undone_entry_id` points at the original entry. */
+    public const ACTION_CHANGE_UNDONE = 'employee.change_undone';
+
     public const UPDATED_AT = null;
 
     protected $table = 'activity_log';
@@ -51,6 +54,37 @@ class ActivityLog extends Model
     public function scopeForSubject(Builder $query, string $type, string|int $id): void
     {
         $query->where('subject_type', $type)->where('subject_id', (string) $id);
+    }
+
+    /**
+     * The undo entries of $entries, by the id of the entry they undid. Entries are
+     * never updated, so "this was undone" is only recorded on the undo entry.
+     *
+     * @param  iterable<self>  $entries
+     * @return array<int, self>
+     */
+    public static function undoEntriesFor(iterable $entries): array
+    {
+        $subjects = collect($entries)
+            ->where('subject_type', self::SUBJECT_EMPLOYEE)
+            ->pluck('subject_id')
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($subjects === []) {
+            return [];
+        }
+
+        return self::query()
+            ->with('user:id,name')
+            ->where('subject_type', self::SUBJECT_EMPLOYEE)
+            ->whereIn('subject_id', $subjects)
+            ->where('action', self::ACTION_CHANGE_UNDONE)
+            ->get()
+            // getAttribute(): inside this class ->changes would be Eloquent's protected property.
+            ->keyBy(fn (self $undo) => $undo->getAttribute('changes')['undone_entry_id'] ?? 0)
+            ->all();
     }
 
     /**
